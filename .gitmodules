@@ -1,0 +1,4 @@
+[submodule "components/framework"]
+	path = components/framework
+	url = https://github.com/weibaohui/aipassport-fw.git
+	branch = main

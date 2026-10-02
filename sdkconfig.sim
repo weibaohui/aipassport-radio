@@ -1,0 +1,5 @@
+# 模拟器调试专用:控制台走 UART0(真实硬件不可用:UART0 TX=GPIO21 与背光冲突)。
+# 用法:SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.sim" idf.py -B build-sim build
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+# CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG is not set
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

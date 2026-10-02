@@ -1,0 +1,54 @@
+# --- 目标芯片 ---
+CONFIG_IDF_TARGET="esp32c3"
+# 注:ESP32-C3 无 PSRAM,故不设 CONFIG_SPIRAM。
+
+# --- Flash ---
+# FoloToy AI Passport 当前产品/固件基线使用 8MB Flash。
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# 固定 8MB 镜像头，关闭 detect，便于 idf.py merge-bin。
+CONFIG_ESPTOOLPY_HEADER_FLASHSIZE_UPDATE=n
+# 默认模板只保留 NVS、PHY data 和占用剩余空间的 factory app；用户可按需修改。
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# --- 控制台:USB-Serial-JTAG(C3 原生 USB,GPIO18/19)---
+# 不用 UART0:其默认 TX=GPIO21 与本板背光引脚冲突。
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# --- LVGL ---
+CONFIG_LV_COLOR_DEPTH_16=y
+# 20 ms display refresh period targets up to 50 FPS when rendering and SPI
+# transfer complete within the same budget.
+CONFIG_LV_DEF_REFR_PERIOD=20
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+# LVGL 内置 malloc 池大小。单位是字节,直接设 LV_MEM_SIZE。
+# 曾经这里只写了已废弃的 LV_MEM_SIZE_KILOBYTES=24,而 LVGL 9 的 Kconfig 里
+# LV_MEM_SIZE 自带 65536 的默认值,并且"两者都定义时以 LV_MEM_SIZE 为准"——
+# 结果实际生效的是 64KB,白占 40KB RAM,编译时还会打两条 #warning。
+# 收音机解码 MP3 要再吃 40KB,这个偏差直接导致解码器 malloc 失败(-2 MEM_LACK)。
+# 本应用 UI 简单(列表 + 几个 label),24KB 足够;若出现绘制卡死/看门狗,调大此值。
+CONFIG_LV_MEM_SIZE=24576
+# 中文界面:UTF-8 编码 + 缺字占位(缺字必须可见,不得静默空白)。
+CONFIG_LV_TXT_ENC_UTF8=y
+CONFIG_LV_USE_FONT_PLACEHOLDER=y
+
+# --- 系统 ---
+CONFIG_FREERTOS_HZ=1000
+
+# --- 网络与 TLS ---
+# mbedTLS 证书包:校验 open.bigmodel.cn 证书链(随 IDF 内置根证书)。
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# SNTP 对时(TLS 校验需要正确墙钟),两个服务器互备。
+CONFIG_LWIP_SNTP_MAX_SERVERS=2
+
+# --- Bluetooth ---
+# 本应用(GLM 用量宝)不使用 BLE,关闭以节省约 25KB 内部 RAM 给 WiFi+TLS。
+# 若要编译参考 demo_ble.c,请恢复以下 NimBLE 配置(见基线 git 历史)。
+# CONFIG_BT_ENABLED is not set
+
+# --- 文件管理(files 分区 FATFS)---
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=64

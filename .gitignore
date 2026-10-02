@@ -1,0 +1,11 @@
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+.vscode/
+.idea/
+
+# 源字体不入库(7.9MB,体积大且可随时下载)。生成物 app_font_*.c 才是要提交的。
+# 重新获取方式见 assets/fonts/README.md。
+
+assets/fonts/NotoSansSC-Regular.otf
