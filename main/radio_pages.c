@@ -341,7 +341,8 @@ const char *radio_pages_app_config_html(void)
     "<div class=\"card\"><h2>0 · 应用配置(网络收音机)</h2>\n"
     "<div style=\"margin:2px 0 8px;color:#9fb0bf;font-size:13px\">"
     "内置两台已实测可达的英文电台(KEXP / Radio Paradise)。"
-    "当前网络下多数境外电台不可达,你可以在这里填自己的流地址。</div>\n"
+    "当前网络下多数境外电台不可达,你可以在这里填自己的流地址。"
+    "下列列表就是设备屏幕上的那份,序号一致。</div>\n"
     "<input type=\"text\" id=\"rname\" placeholder=\"电台名称(必填)\">\n"
     "<input type=\"text\" id=\"rurl\" placeholder=\"http://主机/流路径.mp3(必须 http://)\">\n"
     "<button onclick=\"radioAdd()\">添加</button>\n"
@@ -361,9 +362,11 @@ const char *radio_pages_app_config_html(void)
     "}\n"
     "function radioRender(list){\n"
     "  const u=$('rlist');\n"
-    "  u.innerHTML=(list||[]).map((s,i)=>'<li>'+esc(s.name)+' — <small>'+esc(s.url)+'</small> '\n"
-    "     +'<a href=\"#\" onclick=\"radioPlay('+i+');return false\">播放</a> '\n"
-    "     +'<a href=\"#\" onclick=\"radioDel('+i+');return false\">删除</a></li>').join('')||'<li>无自加电台</li>';\n"
+    "  u.innerHTML=(list||[]).map((s,i)=>'<li>'+(s.builtin?'<b>'+esc(s.name)+'</b>':'esc(s.name)')\n"
+    "     +' — <small>'+esc(s.url)+'</small> '\n"
+    "     +'<a href=\"#\" onclick=\"radioPlay('+i+');return false\">播放</a>'\n"
+    "     +(s.builtin?'':' <a href=\"#\" onclick=\"radioDel('+i+');return false\">删除</a>')\n"
+    "     +'</li>').join('')||'<li>无电台</li>';\n"
     "}\n"
     "async function radioAdd(){\n"
     "  const name=$('rname').value.trim(),url=$('rurl').value.trim();\n"
@@ -375,7 +378,7 @@ const char *radio_pages_app_config_html(void)
     "  radioRender(r.stations);\n"
     "}\n"
     "async function radioDel(i){\n"
-    "  if(!confirm('删除第 '+(i+1)+' 个自加电台?'))return;\n"
+    "  if(!confirm('删除第 '+(i+1)+' 个电台?'))return;\n"
     "  const r=await jpost('/api/radio',{op:'del',index:i});\n"
     "  if(r.ok)radioMsg('已删除',0);else radioMsg(r.error||'删除失败',1);\n"
     "  radioRender(r.stations);\n"
@@ -403,13 +406,16 @@ void radio_pages_app_config_fill(void *obj)
     cJSON *root = (cJSON *)obj;
     cJSON *arr = cJSON_CreateArray();
     if (!arr) return;
-    // 只回显用户自加的那些(与内置台完全同名的同址的不算)。
+    // 回显**完整列表**(内置 + 自加),因为 play/del 的 index 就是按这份列表算的。
+    // 早先这里只回显自加台,而 del/play 却按下标打到合并后的列表上,
+    // 于是"删除第 1 个自加电台"实际删掉的是内置台,而"播放第 1 台"放的是内置第 1 台。
+    // 两份列表、一种下标,这类不一致只能靠让两边看到同一份数据来根治。
     for (uint8_t i = 0; i < s_list.count; i++) {
-        if (is_builtin_exact(s_list.items[i].name, s_list.items[i].url)) continue;
         cJSON *o = cJSON_CreateObject();
         if (!o) continue;
         cJSON_AddStringToObject(o, "n", s_list.items[i].name);
         cJSON_AddStringToObject(o, "u", s_list.items[i].url);
+        cJSON_AddBoolToObject(o, "builtin", is_builtin_exact(s_list.items[i].name, s_list.items[i].url));
         cJSON_AddItemToArray(arr, o);
     }
     cJSON_AddItemToObject(root, "stations", arr);
@@ -509,9 +515,13 @@ static esp_err_t radio_api_handler(httpd_req_t *req)
     } else if (strcmp(op->valuestring, "del") == 0) {
         const cJSON *i = cJSON_GetObjectItemCaseSensitive(root, "index");
         if (!cJSON_IsNumber(i)) { ok = false; err = "缺少 index"; }
-        else if (radio_list_remove(&s_list, (uint8_t)i->valueint)) {
+        else if (i->valueint < 0 || i->valueint >= (int)s_list.count) { ok = false; err = "下标越界"; }
+        else if (is_builtin_exact(s_list.items[i->valueint].name, s_list.items[i->valueint].url)) {
+            // 内置台删掉就再也加不回来(要改代码),不如明说。
+            ok = false; err = "内置电台不能删除";
+        } else if (radio_list_remove(&s_list, (uint8_t)i->valueint)) {
             save_user();
-        } else { ok = false; err = "下标越界"; }
+        } else { ok = false; err = "删除失败"; }
     } else if (strcmp(op->valuestring, "play") == 0) {
         // 电台本来就在这个页面上管理,顺手也能开播/停播:调试时不用守在机器前按键。
         const cJSON *i = cJSON_GetObjectItemCaseSensitive(root, "index");

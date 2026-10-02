@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 24 px
  * Bpp: 4
- * Opts: --font NotoSansSC-Regular.otf --size 24 --format lvgl --bpp 4 --lv-include lvgl.h --no-compress --force-fast-kern-format --symbols !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~收机络网音 -o app_font_24.c
+ * Opts: --font /Users/weibh/Desktop/aipassport-radio/assets/fonts/NotoSansSC-Regular.otf --size 24 --format lvgl --bpp 4 --lv-include lvgl.h --no-compress --force-fast-kern-format --symbols !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~收机络网音 -o /Users/weibh/Desktop/aipassport-radio/assets/fonts/app_font_24.c
  ******************************************************************************/
 
 #ifdef LV_LVGL_H_INCLUDE_SIMPLE

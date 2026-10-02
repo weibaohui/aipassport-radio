@@ -21,29 +21,25 @@ LVGL 自带的字体(Montserrat)没有中文字形,中文界面必须自带字�
 
 ## 重新生成
 
-需要 `lv_font_conv`(本机用 `npx lv_font_conv@1.5.3`)和思源黑体
-`NotoSansSC-Regular.otf`。**7.9MB 的源字体不入库**,需要时先下载到本目录:
-
-```bash
-curl -L -o NotoSansSC-Regular.otf \
-  "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
-```
-
-然后生成:
+不要手工维护字符清单。`tools/gen_fonts.py` 会从**真正会被 LVGL 渲染的源码**
+里推导字符集,生成两个字库,最后自己跑一遍字形门禁当作自检:
 
 ```bash
 cd assets/fonts
+curl -L -o NotoSansSC-Regular.otf \
+  "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
+cd ../..
+python3 tools/gen_fonts.py
+```
 
-S16=$(python3 -c "print(''.join(sorted(set(open('radio_charset.txt',encoding='utf-8').read().strip()))))")
-S24=$(python3 -c "print(''.join(sorted(set(open('radio_charset_24.txt',encoding='utf-8').read().strip()))))")
+7.9MB 的源字体不入库,按上面下载一次即可。
 
+它内部对每个字号调用:
+
+```bash
 npx --yes lv_font_conv@1.5.3 --font NotoSansSC-Regular.otf \
   --size 16 --format lvgl --bpp 4 --lv-include lvgl.h \
-  --no-compress --force-fast-kern-format --symbols "$S16" -o app_font_16.c
-
-npx --yes lv_font_conv@1.5.3 --font NotoSansSC-Regular.otf \
-  --size 24 --format lvgl --bpp 4 --lv-include lvgl.h \
-  --no-compress --force-fast-kern-format --symbols "$S24" -o app_font_24.c
+  --no-compress --force-fast-kern-format --symbols "$SYMS" -o app_font_16.c
 ```
 
 要用 `--symbols` 而不是 `--range`:`--range` 只接受 `0x20-0x7F` 这样的数值
@@ -51,10 +47,12 @@ npx --yes lv_font_conv@1.5.3 --font NotoSansSC-Regular.otf \
 
 ## 加了新文案怎么办
 
-1. 把新字加进 `radio_charset.txt`(改了标题还要同步 `radio_charset_24.txt`);
-2. 按上面重新生成;
-3. 跑 `./tools/validate.sh`——`tests/test_ui_charset.py` 会同时校验
+1. 跑 `python3 tools/gen_fonts.py`。
+2. 跑 `./tools/validate.sh`——`tests/test_ui_charset.py` 会同时校验
    **字符清单**和**生成物里真实的 Unicode 区间**。
 
-第 3 步不是走形式:清单改了却忘了重新生成时,只有生成物级校验能发现。否则
-设备上就是空白或方框,而编译和门禁其余部分照样全绿。
+第 2 步挡的是"改了源码文案却忘了重新生成字库"。没有生成物级校验的话,
+编译和门禁其余部分照样全绿,而设备上是一片空白或方框。
+
+生成器会**故意多收**:本应用把门户 HTML 卡片和 UI 字符串写在同一个文件里,
+门户那些字符串也会被扫进去。多几个字每个约 200 字节,换来的是少一整类意外。

@@ -25,30 +25,26 @@ The cost is that **changing `home_title` requires regenerating the 24px font**.
 
 ## Regenerating
 
-Requires `lv_font_conv` (here `npx lv_font_conv@1.5.3`) and Source Han Sans
-`NotoSansSC-Regular.otf`. The 7.9 MB source font is **not committed**; fetch it
-once into this directory:
-
-```bash
-curl -L -o NotoSansSC-Regular.otf \
-  "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
-```
-
-Then generate:
+Do not hand-maintain the character lists. `tools/gen_fonts.py` derives them
+from the sources that LVGL actually renders, generates both fonts, and then
+runs the glyph gate as its own self-check:
 
 ```bash
 cd assets/fonts
+curl -L -o NotoSansSC-Regular.otf \
+  "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansSC-Regular.otf"
+cd ../..
+python3 tools/gen_fonts.py
+```
 
-S16=$(python3 -c "print(''.join(sorted(set(open('radio_charset.txt',encoding='utf-8').read().strip()))))")
-S24=$(python3 -c "print(''.join(sorted(set(open('radio_charset_24.txt',encoding='utf-8').read().strip()))))")
+The 7.9 MB source font is not committed; fetch it once as shown.
 
+Under the hood it calls, for each size:
+
+```bash
 npx --yes lv_font_conv@1.5.3 --font NotoSansSC-Regular.otf \
   --size 16 --format lvgl --bpp 4 --lv-include lvgl.h \
-  --no-compress --force-fast-kern-format --symbols "$S16" -o app_font_16.c
-
-npx --yes lv_font_conv@1.5.3 --font NotoSansSC-Regular.otf \
-  --size 24 --format lvgl --bpp 4 --lv-include lvgl.h \
-  --no-compress --force-fast-kern-format --symbols "$S24" -o app_font_24.c
+  --no-compress --force-fast-kern-format --symbols "$SYMS" -o app_font_16.c
 ```
 
 Use `--symbols`, not `--range`: `--range` only accepts numeric spans such as
@@ -56,12 +52,15 @@ Use `--symbols`, not `--range`: `--range` only accepts numeric spans such as
 
 ## After adding UI text
 
-1. Add the new characters to `radio_charset.txt` (and to `radio_charset_24.txt`
-   if the title changed).
-2. Regenerate as above.
-3. Run `./tools/validate.sh`. `tests/test_ui_charset.py` checks both the
+1. Run `python3 tools/gen_fonts.py`.
+2. Run `./tools/validate.sh`. `tests/test_ui_charset.py` checks both the
    character list **and the real Unicode ranges inside the generated file**.
 
-Step 3 is not ceremony. If the list is updated but the font is not regenerated,
-only the generated-file check can catch it; otherwise the device shows blanks
-or tofu boxes while both the build and the rest of the gate pass.
+Step 2 is what catches the case where a developer edits a source string and
+never regenerates. Without the generated-file check, the build and the rest of
+the gate pass while the device shows blanks or tofu boxes.
+
+The generator deliberately over-collects: this application keeps the portal
+HTML card in the same file as the UI strings, and those portal strings are
+scanned too. A few spare glyphs cost about 200 bytes each and remove a whole
+class of surprise.

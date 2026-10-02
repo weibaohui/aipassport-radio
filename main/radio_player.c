@@ -528,9 +528,15 @@ static void player_task(void *arg)
         if (err == RADIO_ERR_NONE) { set_snap(RADIO_STOPPED, RADIO_ERR_NONE); continue; }
 
         set_snap(RADIO_ERROR, err);
-        ESP_LOGW(TAG, "收听失败,err=%d,%.2fs 后重试", (int)err, RETRY_DELAY_MS / 1000.0);
+        ESP_LOGW(TAG, "收听失败,err=%d,%.2fs 后重连同一个台", (int)err, RETRY_DELAY_MS / 1000.0);
         // 退避期间仍可被切台打断
         for (int i = 0; i < RETRY_DELAY_MS / 50 && !s_quit; i++) vTaskDelay(pdMS_TO_TICKS(50));
+        // 必须把请求重新置位,否则外层会回到"等用户操作"的空转里,
+        // 明明日志写着"后重试",实际上要等用户再按一次 OK 才重连。
+        // 用户在退避期间切台或停止的话,请求本身已被换掉,这里再置位无副作用。
+        portENTER_CRITICAL(&s_lock);
+        s_req_pending = true;
+        portEXIT_CRITICAL(&s_lock);
     }
 }
 
