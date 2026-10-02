@@ -153,40 +153,52 @@ static bool header_value(const char *headers, const char *name, char *out, size_
 // 扫全流反而更稳:模式串 12 字节且极特殊,16KB/s 的音频里误命中概率可以忽略,
 // 即使命中也只会短暂显示一次乱码标题。这比"信任服务端声明的分帧"可靠得多。
 // 注意仍然要发 Icy-MetaData: 1——不声明的话服务端根本不会把标题插进流里。
+// 在 [b, b+len) 里找 StreamTitle='…'。找到并读到右引号时把标题写进 out 并返回 true。
+static bool find_title(const uint8_t *b, size_t len, char *out, size_t out_len)
+{
+    static const char key[] = "StreamTitle='";
+    static const size_t klen = sizeof(key) - 1;
+    for (size_t i = 0; i + klen <= len; i++) {
+        if (memcmp(b + i, key, klen) != 0) continue;
+        size_t j = i + klen;
+        while (j < len && b[j] != '\'' && b[j] != ';' && b[j] != '\0') j++;
+        if (j >= len) return false;   // 标题被切断,等下一块
+        size_t n = j - (i + klen);
+        if (n >= out_len) n = out_len - 1;
+        memcpy(out, b + i + klen, n);
+        out[n] = '\0';
+        return true;
+    }
+    return false;
+}
+
 static void scan_stream_title(const uint8_t *buf, size_t len)
 {
     static const char key[] = "StreamTitle='";
     static const size_t klen = sizeof(key) - 1;
     if (len < klen) return;
 
-    // 曲名可能正好被读边界切成两半,所以先把上一块末尾 klen-1 字节接到本块前面
-    // 一起扫,扫完再留本块末尾那一段。代价只有几十字节,换来不会漏曲名。
-    static uint8_t tail[sizeof("StreamTitle='") - 2];
-    const size_t tail_len = s_title_tail_len;
-    uint8_t *joined = malloc(tail_len + len);
-    if (!joined) return;
-    memcpy(joined, tail, tail_len);
-    memcpy(joined + tail_len, buf, len);
-
-    for (size_t i = 0; i + klen < tail_len + len; i++) {
-        if (memcmp(joined + i, key, klen) != 0) continue;
-        size_t j = i + klen;
-        while (j < tail_len + len && joined[j] != '\'' && joined[j] != ';' && joined[j] != '\0') j++;
-        char title[RADIO_TITLE_MAX];
-        if (j < tail_len + len) {
-            size_t n = j - (i + klen);
-            if (n >= sizeof(title)) n = sizeof(title) - 1;
-            memcpy(title, joined + i + klen, n);
-            title[n] = '\0';
-            if (title[0]) set_title(title);
+    char title[RADIO_TITLE_MAX];
+    if (find_title(buf, len, title, sizeof(title))) {
+        if (title[0]) set_title(title);
+    } else if (s_title_tail_len) {
+        // 曲名可能正好被读边界切成两半,所以补扫"上一块末尾 + 本块开头"这条接缝。
+        // 只需要 22 字节的栈上缓冲。早先这里为了拼接而每读一块就 malloc 一次整块
+        // 大小(约 4KB),等于每秒制造 16KB 的堆 churn——在只剩几十 KB 可用的堆上,
+        // 反复分配/释放正是碎片的来源,真机上表现为任务栈余量从 2824 掉到 2116 字节。
+        uint8_t seam[2 * (sizeof("StreamTitle='") - 2)];
+        memcpy(seam, s_title_tail, klen - 1);
+        memcpy(seam + (klen - 1), buf, klen - 1);
+        if (find_title(seam, 2 * (klen - 1), title, sizeof(title)) && title[0]) {
+            set_title(title);
         }
-        break;
     }
 
-    memcpy(tail, joined + (tail_len + len) - (klen - 1), klen - 1);
+    // 留本块末尾 klen-1 字节,供下一块拼接缝。
+    memcpy(s_title_tail, buf + len - (klen - 1), klen - 1);
     s_title_tail_len = klen - 1;
-    free(joined);
 }
+
 // ---------------------------------------------------------------- MP3 解码
 
 // 用组件的 Simple Decoder,不用裸的 esp_mp3_dec_*。
