@@ -10,7 +10,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "appfw_files.h"
 #include "bsp_audio.h"
 #include "esp_wifi.h"
 #include "esp_crt_bundle.h"
@@ -642,10 +641,8 @@ static radio_err_t run_one_stream(const char *url, bool *played)
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         return RADIO_ERR_DECODE;
     }
-    // 大清单"借洞挂载"期间预留不在手上(FAT 占着 ~9KB):先让文件库归还,
-    // 60KB 才回得来;没挂载时 unmount 是无操作。
-    appfw_files_unmount();
-    reacquire_reserve_force();
+    // (不再卸载 FAT:清单里已无 HLS,FAT 常驻 ~8KB 完全可承受。此前每次
+    // 切台都卸载+重挂,挂载一旦失败(句柄漏光)就表现为"第 7 台起切不动"。)
     // WiFi 退出省电(modem sleep):内存紧张时 PS 模式的突发收包会被压到
     // 几 KB/s,HLS 直播流(段 200KB/10s)必断。播音期间不需要省电。
     esp_wifi_set_ps(WIFI_PS_NONE);
