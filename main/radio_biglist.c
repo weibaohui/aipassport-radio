@@ -271,11 +271,13 @@ bool radio_biglist_poll(void)
     }
     if (!fm && fat_open()) fm = fopen(pm3u, "rb");
     if (!fm) {
-        // 没有大清单:退回小清单,别让 FAT(≈8KB)常驻占播放/TLS 的内存。
+        // 没有大清单:别让 FAT(≈8KB)常驻占播放/TLS 的内存。粘住模式下
+        // 保留缓存条数(available 仍 true),设备显示不变;恢复出厂才会
+        // 经 discard() 把计数清零。
         s_miss_check_us = now;
-        if (s_avail) ESP_LOGI(TAG, "radio.m3u 消失,退回小清单");
+        if (s_avail) ESP_LOGI(TAG, "radio.m3u 暂不可读");
         s_avail = false;
-        s_count = 0;
+        if (!s_ever_avail) s_count = 0;
         (void)appfw_files_unmount();
         if (s_borrowed) radio_player_reacquire_reserve();
         s_borrowed = false;

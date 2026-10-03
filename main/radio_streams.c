@@ -26,12 +26,12 @@
 // 注意:本文件必须列进 tools/gen_fonts.py 的 SOURCES_16 —— 台名会直接进
 // lv_label_set_text(),漏了就真机上显示成空白。
 static const radio_station_t BUILTIN[] = {
-    { "上海交通广播 FM105.7", "http://lhttp.qingting.fm/live/266/64k.mp3" },
-    { "中国之声",             "http://lhttp.qingting.fm/live/15318317/64k.mp3" },
-    { "上海东广新闻广播",     "http://lhttp.qingting.fm/live/275/64k.mp3" },
-    { "大连音乐广播",         "http://lhttp.qingting.fm/live/1084/64k.mp3" },
-    { "CityFM 城市音乐台",    "http://lhttp.qingting.fm/live/20500153/64k.mp3" },
-    { "三亚旅游之声 103.8",   "http://lhttp.qingting.fm/live/15318203/64k.mp3" },
+{ "CityFM 城市音乐台",            "http://lhttp.qingting.fm/live/20500153/64k.mp3" },
+{ "三亚旅游之声 103.8",            "http://lhttp.qingting.fm/live/15318203/64k.mp3" },
+{ "上海东广新闻广播",                "http://lhttp.qingting.fm/live/275/64k.mp3" },
+{ "上海交通广播 FM105.7",          "http://lhttp.qingting.fm/live/266/64k.mp3" },
+{ "中国之声",                    "http://lhttp.qingting.fm/live/15318317/64k.mp3" },
+{ "大连音乐广播",                  "http://lhttp.qingting.fm/live/1084/64k.mp3" },
 };
 #define BUILTIN_N ((uint8_t)(sizeof(BUILTIN) / sizeof(BUILTIN[0])))
 
