@@ -39,7 +39,9 @@ static void test_url_valid(void)
 
     assert(!radio_url_valid(NULL));
     assert(!radio_url_valid(""));
-    assert(!radio_url_valid("https://a.com/s"));            // 只收 http
+    assert(radio_url_valid("https://a.com/s"));             // 2026-10-03 起 https 支持
+    assert(radio_url_valid("http://a.com:8000/live.mp3"));  // 带端口
+    assert(!radio_url_valid("ftp://a.com/s"));              // 其他 scheme 仍拒
     assert(!radio_url_valid("ftp://a.com/s"));
     assert(!radio_url_valid("http://"));                    // 无 host
     assert(!radio_url_valid("http:///path"));
@@ -73,7 +75,8 @@ static void test_hostport(void)
     assert(radio_url_hostport("http://192.168.0.9:8000/s", hp, sizeof(hp)));
     assert(strcmp(hp, "192.168.0.9:8000") == 0);
 
-    assert(!radio_url_hostport("https://a.com/s", hp, sizeof(hp)));
+    assert(radio_url_hostport("https://a.com/s", hp, sizeof(hp)));
+    assert(strcmp(hp, "a.com") == 0);
     assert(radio_url_hostport("http://a.com:1/s", hp, sizeof(hp)));
     assert(strcmp(hp, "a.com:1") == 0);
     assert(radio_url_hostport("http://a.com:65535/s", hp, sizeof(hp)));
@@ -114,20 +117,21 @@ static void test_list_ops(void)
 
     // 非法输入一律拒绝
     assert(!radio_list_add(&l, "", "http://c.com/"));
-    assert(!radio_list_add(&l, "C", "https://c.com/"));
+    assert(radio_list_add(&l, "C", "https://c.com/"));   // https 台也是合法台
+    assert(l.count == 3);   // A、B、C
     assert(!radio_list_add(&l, "C", NULL));
     char longname[RADIO_NAME_MAX + 4];
     memset(longname, 'n', sizeof(longname) - 1);
     longname[sizeof(longname) - 1] = '\0';
     assert(!radio_list_add(&l, longname, "http://c.com/"));
-    assert(l.count == 2);
+    assert(l.count == 3);
 
     // 删中间项后整体前移,尾项清零
     assert(radio_list_remove(&l, 0));
-    assert(l.count == 1);
+    assert(l.count == 2);
     assert(strcmp(l.items[0].name, "B") == 0);
-    assert(l.items[1].name[0] == '\0');
-    assert(l.items[1].url[0] == '\0');
+    assert(strcmp(l.items[1].name, "C") == 0);
+    assert(l.items[1].url[0] != '\0');
 
     // 容量上限
     radio_list_reset(&l);

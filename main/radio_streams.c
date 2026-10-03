@@ -56,17 +56,24 @@ bool radio_url_valid(const char *url)
     if (!url) return false;
     const size_t len = strlen(url);
     if (len == 0 || len >= RADIO_URL_MAX) return false;
-    // 只收 http://。https:// 需要常驻 TLS 状态,本机内存预算放不下;
-    // 误填 https 应当明确拒绝,而不是悄悄降级或连不上后只报"连接失败"。
-    static const char prefix[] = "http://";
-    if (strncmp(url, prefix, sizeof(prefix) - 1) != 0) return false;
     // 空白字符会让 http_client 解析出奇怪的请求行,直接拒。
+    // (按完整长度查,必须在 scheme 剥离之前——剥离后指针前移、长度就对不上了。)
     for (size_t i = 0; i < len; i++) {
         const char c = url[i];
         if (c == ' ' || c == '\t' || c == '\r' || c == '\n' || c < 0x20) return false;
     }
+    // http/https 都收(2026-10-03 起播放器支持 TLS)。scheme 之后的规则相同。
+    static const char http_p[] = "http://";
+    static const char https_p[] = "https://";
+    if (strncmp(url, http_p, sizeof(http_p) - 1) == 0) {
+        url += sizeof(http_p) - 1;
+    } else if (strncmp(url, https_p, sizeof(https_p) - 1) == 0) {
+        url += sizeof(https_p) - 1;
+    } else {
+        return false;
+    }
     // scheme 之后必须有 host。
-    const char *rest = url + sizeof(prefix) - 1;
+    const char *rest = url;
     const char *slash = strchr(rest, '/');
     const size_t host_len = slash ? (size_t)(slash - rest) : strlen(rest);
     if (host_len == 0) return false;
@@ -84,7 +91,8 @@ bool radio_url_hostport(const char *url, char *out, size_t out_len)
     out[0] = '\0';
     if (!radio_url_valid(url)) return false;
 
-    const char *rest = url + sizeof("http://") - 1;
+    const char *rest = strstr(url, "://");
+    rest = rest ? rest + 3 : url;   // http/https 通用:取 scheme 之后的部分
     const char *slash = strchr(rest, '/');
     const size_t host_len = slash ? (size_t)(slash - rest) : strlen(rest);
     if (host_len == 0 || host_len + 1 > RADIO_HOST_MAX) return false;

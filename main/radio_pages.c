@@ -20,6 +20,8 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
+#include "radio_m3u.h"
+#include "radio_m3u_default.h"
 #include "radio_player.h"
 #include "radio_streams.h"
 #include "radio_viz_view.h"
@@ -35,7 +37,8 @@ LV_FONT_DECLARE(app_font_24);
 #define ROW_X         14                      // 行左边距
 #define ROW_W         212                     // 行宽
 #define EXTRA_ROWS    1                       // 列表末尾的「设置」行
-#define NVS_LIST_KEY  "radio_stations"        // 用户自加电台(JSON 数组)
+#define NVS_M3U_KEY   "radio_m3u"             // 用户电台清单(M3U 文本,定稿格式)
+#define M3U_BUF_SIZE  (12 * 1024)             // M3U 文本缓冲(48 台约 6KB,留倍)
 
 static radio_list_t s_list;
 static int s_sel;                             // 选中下标 0..count-1,count=设置行
@@ -564,51 +567,72 @@ static bool is_builtin_exact(const char *name, const char *url)
 // 用户自加电台以 JSON 数组存一条 NVS 记录;格式稳定,便于导出与迁移。
 static void save_user(void)
 {
-    cJSON *arr = cJSON_CreateArray();
-    if (!arr) return;
+    // 只存非内置台(内置台在代码里,存进去会随固件漂移),格式 M3U。
+    struct radio_m3u_entry *e = malloc(sizeof(*e) * s_list.count);
+    char *txt = e ? malloc((size_t)s_list.count * 160 + 32) : NULL;
+    if (!e || !txt) {
+        ESP_LOGW(TAG, "保存清单失败(内存不足)");
+        free(e);
+        free(txt);
+        return;
+    }
+    uint8_t n = 0;
     for (uint8_t i = 0; i < s_list.count; i++) {
         if (is_builtin_exact(s_list.items[i].name, s_list.items[i].url)) continue;
-        cJSON *o = cJSON_CreateObject();
-        if (!o) continue;
-        cJSON_AddStringToObject(o, "n", s_list.items[i].name);
-        cJSON_AddStringToObject(o, "u", s_list.items[i].url);
-        cJSON_AddItemToArray(arr, o);
+        snprintf(e[n].name, sizeof(e[n].name), "%s", s_list.items[i].name);
+        snprintf(e[n].url, sizeof(e[n].url), "%s", s_list.items[i].url);
+        n++;
     }
-    char *txt = cJSON_PrintUnformatted(arr);
-    cJSON_Delete(arr);
-    if (txt) {
-        (void)appfw_store_set_str(NVS_LIST_KEY, txt);
-        cJSON_free(txt);
+    const size_t len = radio_m3u_serialize(e, n, txt, (size_t)s_list.count * 160 + 32);
+    if (len) {
+        (void)appfw_store_set_str(NVS_M3U_KEY, txt);
+    } else if (n == 0) {
+        (void)appfw_store_set_str(NVS_M3U_KEY, "");   // 空清单=清键,下次回落出厂
+    } else {
+        ESP_LOGW(TAG, "M3U 序列化失败(缓冲不足)");
     }
+    free(e);
+    free(txt);
 }
 
 // 这几个局部量合计约 3KB,而 app_main 跑在 main 任务上,栈只有 3584 字节
 // (CONFIG_ESP_MAIN_TASK_STACK_SIZE)。放栈上会直接触发 stack protection fault,
 // 所以一律 static:这里本来就是启动期跑一次的初始化/刷新路径。
+// M3U 导入筛选(应用策略):播放器能力 = http/https 直链;HLS(.m3u8)暂不支持。
+static bool radio_m3u_accept_http(const char *name, const char *url, void *user)
+{
+    (void)name; (void)user;
+    return (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
+           && strstr(url, ".m3u8") == NULL;
+}
+
+// M3U 条目并入电台列表(查重/容量由 radio_list_add 处理)。
+static void radio_m3u_merge_cb(void *user, const char *name, const char *url)
+{
+    radio_list_add((radio_list_t *)user, name, url);
+}
+
 static void load_user(void)
 {
-    static radio_list_t builtin;
-    static radio_list_t user;
-    static char buf[1024];
-
+    static radio_list_t builtin;   // 启动期一次性,静态省栈(app_main 栈仅 3.5KB)
     radio_list_builtin(&builtin);
     s_list = builtin;
 
-    if (!appfw_store_get_str(NVS_LIST_KEY, buf, sizeof(buf)) || !buf[0]) return;
-    cJSON *arr = cJSON_Parse(buf);
-    if (!cJSON_IsArray(arr)) { cJSON_Delete(arr); return; }
-    radio_list_reset(&user);
-    const cJSON *o = NULL;
-    cJSON_ArrayForEach(o, arr) {
-        const cJSON *n = cJSON_GetObjectItemCaseSensitive(o, "n");
-        const cJSON *u = cJSON_GetObjectItemCaseSensitive(o, "u");
-        if (cJSON_IsString(n) && cJSON_IsString(u)) {
-            (void)radio_list_add(&user, n->valuestring, u->valuestring);
-        }
+    // 用户台清单以 M3U 文本持久化。无记录(新机/换清单前)时回落到固件
+    // 内嵌的出厂清单(RADIO_M3U_DEFAULT);出厂清单只展示不落盘——首次
+    // 保存(增删台/导入)才写入 NVS。
+    char *buf = malloc(M3U_BUF_SIZE);
+    radio_m3u_stats_t st = { 0 };
+    if (buf && appfw_store_get_str(NVS_M3U_KEY, buf, M3U_BUF_SIZE) && buf[0]) {
+        radio_m3u_parse(buf, NULL, radio_m3u_accept_http, &s_list, radio_m3u_merge_cb, &st);
+        ESP_LOGI(TAG, "已载入用户 M3U:%d 台(合计 %u)", st.accepted, s_list.count);
     }
-    cJSON_Delete(arr);
-    merge_user(&user);
-    ESP_LOGI(TAG, "已载入 %u 个用户电台,合计 %u", user.count, s_list.count);
+    if (st.accepted == 0) {
+        // 无用户清单(或空):回落固件内嵌出厂清单。出厂清单只展示不落盘。
+        radio_m3u_parse(RADIO_M3U_DEFAULT, NULL, radio_m3u_accept_http, &s_list, radio_m3u_merge_cb, &st);
+        ESP_LOGI(TAG, "使用出厂清单:%d 台(合计 %u)", st.accepted, s_list.count);
+    }
+    free(buf);
 }
 
 void radio_pages_init(void)

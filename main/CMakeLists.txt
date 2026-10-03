@@ -6,7 +6,7 @@
 idf_component_register(
     SRC_DIRS "."
     INCLUDE_DIRS "."
-    REQUIRES appfw bsp esp_timer nvs_flash esp_audio_codec json
+    REQUIRES appfw bsp esp_timer nvs_flash esp_audio_codec json esp_http_client mbedtls
 )
 
 # 中文字体子集(生成物,来源/命令/字符清单见 assets/fonts/README.md)。

@@ -11,14 +11,13 @@
 #include <string.h>
 
 #include "bsp_audio.h"
+#include "esp_crt_bundle.h"
+#include "esp_http_client.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "lwip/inet.h"
-#include "lwip/netdb.h"
-#include "lwip/sockets.h"
 #include "portmacro.h"
 
 #include "decoder/esp_audio_dec_default.h"
@@ -71,6 +70,19 @@ static size_t sbuf_used(const sbuf_t *q) { return q->w - q->r; }
 
 static size_t sbuf_free(const sbuf_t *q) { return q->cap - 1 - sbuf_used(q); }
 
+static size_t sbuf_write(sbuf_t *q, const uint8_t *in, size_t len)
+{
+    const size_t used = sbuf_used(q);
+    if (len > q->cap - 1 - used) len = q->cap - 1 - used;   // 保留 r!=w 判空
+    const size_t w = q->w % q->cap;
+    const size_t tail = q->cap - w;
+    const size_t first = len < tail ? len : tail;
+    memcpy(q->buf + w, in, first);
+    memcpy(q->buf, in + first, len - first);
+    q->w += len;
+    return len;
+}
+
 static size_t sbuf_read(sbuf_t *q, uint8_t *out, size_t len)
 {
     const size_t used = sbuf_used(q);
@@ -84,17 +96,18 @@ static size_t sbuf_read(sbuf_t *q, uint8_t *out, size_t len)
     return len;
 }
 
-// recv 直接收进环桶的连续段(零额外拷贝)。返回 recv 原值;>0 时桶内
-// 新数据的起点在 (q->w - n) % cap,长度 n 必然落在同一段内。
-static int sbuf_recv_into(sbuf_t *q, int fd, int flags)
+// esp_http_client_read 直接收进环桶的连续段(零额外拷贝)。返回值同
+// esp_http_client_read:>0 数据(桶内新数据起点 (q->w - n) % cap,长度 n
+// 必然落在同一段内);0 = 暂无数据或对端关闭;-1 = 错误/超时。
+static int sbuf_http_read_into(sbuf_t *q, esp_http_client_handle_t client)
 {
-    size_t free_bytes = sbuf_free(q);
+    const size_t free_bytes = sbuf_free(q);
     if (free_bytes == 0) return 0;
     const size_t w = q->w % q->cap;
     size_t contig = q->cap - w;
     if (contig > free_bytes) contig = free_bytes;
-    if (contig > FEED_CHUNK) contig = FEED_CHUNK;
-    const int n = recv(fd, q->buf + w, contig, flags);
+    if (contig > FEED_CHUNK * 2) contig = FEED_CHUNK * 2;
+    const int n = esp_http_client_read(client, (char *)(q->buf + w), (int)contig);
     if (n > 0) q->w += (size_t)n;
     return n;
 }
@@ -147,38 +160,6 @@ static void set_title(const char *t)
 }
 
 // ---------------------------------------------------------------- HTTP 头解析
-
-// 从一段 HTTP 响应头里取值(大小写不敏感)。命中返回 true。
-static bool header_value(const char *headers, const char *name, char *out, size_t out_len)
-{
-    const size_t nlen = strlen(name);
-    for (const char *p = headers; p && *p; ) {
-        const char *eol = strstr(p, "\r\n");
-        if (!eol) break;
-        if ((size_t)(eol - p) > nlen) {
-            for (size_t i = 0; i < nlen; i++) {
-                char a = p[i], b = name[i];
-                if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
-                if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
-                if (a != b) break;
-                if (i + 1 == nlen) {
-                    if (p[nlen] == ':') {
-                        const char *v = p + nlen + 1;
-                        while (*v == ' ') v++;
-                        size_t k = 0;
-                        while (v[k] && v[k] != '\r' && v[k] != '\n' && k + 1 < out_len) {
-                            out[k] = v[k]; k++;
-                        }
-                        out[k] = '\0';
-                        return true;
-                    }
-                }
-            }
-        }
-        p = eol + 2;
-    }
-    return false;
-}
 
 // ---------------------------------------------------------------- MP3 解码
 
@@ -397,40 +378,46 @@ advance:
 // ---------------------------------------------------------------- 收听一轮
 
 // 尝试完整收听一个流,返回错误码。成功会一直播到 s_quit 或断流。
+// ---- 响应头探针:icy-metaint 只能经 HTTP_EVENT_ON_HEADER 拿到 ----
+// (esp_http_client_get_header 读的是请求头,拿不到响应头——参考固件踩过)。
+typedef struct {
+    uint32_t metaint;
+} http_probe_t;
+
+static esp_err_t http_event_cb(esp_http_client_event_t *evt)
+{
+    http_probe_t *probe = (http_probe_t *)evt->user_data;
+    if (probe == NULL || evt->event_id != HTTP_EVENT_ON_HEADER) return ESP_OK;
+    if (evt->header_key == NULL || evt->header_value == NULL) return ESP_OK;
+    if (strcasecmp(evt->header_key, "icy-metaint") == 0) {
+        probe->metaint = (uint32_t)strtoul(evt->header_value, NULL, 10);
+    }
+    return ESP_OK;
+}
+
 static radio_err_t run_one_stream(const char *url, bool *played)
 {
     radio_err_t result = RADIO_ERR_NONE;
     esp_audio_simple_dec_handle_t dec = NULL;
+    esp_http_client_handle_t client = NULL;
     uint8_t *pcm = NULL;
     uint8_t *ring_buf = NULL;
     uint8_t *feed = NULL;
-    int fd = -1;
+    uint8_t *scratch = NULL;
+    http_probe_t probe = { 0 };
     size_t ring_cap = 0;
     sbuf_t ring = { 0 };
     size_t prefill = 0;
 
     if (played) *played = false;
 
-    char hostport[RADIO_HOST_MAX];
-    if (!radio_url_hostport(url, hostport, sizeof(hostport))) return RADIO_ERR_URL;
-
-    char host[RADIO_HOST_MAX];
-    int port = 80;
-    char *colon = strrchr(hostport, ':');
-    if (colon) {
-        *colon = '\0';
-        snprintf(host, sizeof(host), "%s", hostport);
-        port = atoi(colon + 1);
-        if (port <= 0 || port > 65535) return RADIO_ERR_URL;
-    } else {
-        snprintf(host, sizeof(host), "%s", hostport);
-    }
+    if (!radio_url_valid(url)) return RADIO_ERR_URL;
 
     set_snap(RADIO_CONNECTING, RADIO_ERR_NONE);
     set_title(NULL);
 
     // ---- 先开解码器、拿全部分配,再建连接 ----
-    // (吸收 shulinbao/ai-passport-radio 的教训)连接建立后 lwIP/TCP 会话会把堆
+    // (吸收 shulinbao/ai-passport-radio 的教训)连接建立后 TLS/TCP 会话会把堆
     // 切碎,那时再开解码器就是 MEM_LACK;helix MP3 首次解码还要一次性惰性分配
     // 约 20KB 连续堆。顺序必须是:解码器 → 全部缓冲 → 连接。环桶上限也为此压
     // 到 8KB——它挤占的正是解码器要用的那块连续内存(真机 ret 10 刷屏的根因)。
@@ -453,7 +440,8 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     ring_cap = RING_CAP_MAX;
     while (ring_cap >= RING_CAP_MIN && !(ring_buf = malloc(ring_cap))) ring_cap /= 2;
     feed = malloc(FEED_CHUNK);
-    if (!pcm || !ring_buf || !feed) {
+    scratch = malloc(FEED_CHUNK);
+    if (!pcm || !ring_buf || !feed || !scratch) {
         ESP_LOGE(TAG, "缓冲分配失败(剩余堆 %u)", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
         result = RADIO_ERR_DECODE;
         goto done;
@@ -464,140 +452,97 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     ESP_LOGI(TAG, "抖动缓冲 %uKB,预灌 %u 字节",
              (unsigned)(ring_cap / 1024), (unsigned)prefill);
 
-    // ---- 连接 ----
-    struct addrinfo hints, *res = NULL;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    char portstr[8];
-    snprintf(portstr, sizeof(portstr), "%d", port);
-    if (getaddrinfo(host, portstr, &hints, &res) != 0 || !res) {
-        ESP_LOGW(TAG, "域名解析失败: %s", host);
-        result = RADIO_ERR_RESOLVE;
-        goto done;
-    }
-
-    fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-    if (fd < 0) { freeaddrinfo(res); res = NULL; result = RADIO_ERR_CONNECT; goto done; }
-
-    {
-        struct timeval tv = { .tv_sec = 0, .tv_usec = RX_TIMEOUT_MS * 1000 };
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    }
-
-    if (connect(fd, res->ai_addr, res->ai_addrlen) != 0) {
-        ESP_LOGW(TAG, "连接失败 %s:%d", host, port);
+    // ---- 连接(esp_http_client:http/https 通吃,https 走证书包) ----
+    const esp_http_client_config_t cfg = {
+        .url = url,
+        .user_agent = "AI-Passport-Radio/1.0",   // 别伪装浏览器:有的 CDN 对浏览器
+                                                 // UA 会在 32KB 处掐断(参考固件实测)
+        .buffer_size = 2048,
+        .buffer_size_tx = 512,
+        .timeout_ms = 10000,
+        .keep_alive_enable = true,
+        .event_handler = http_event_cb,          // 从响应头取 icy-metaint
+        .user_data = &probe,
+        .crt_bundle_attach = (strncmp(url, "https://", 8) == 0)
+                                 ? esp_crt_bundle_attach : NULL,
+    };
+    client = esp_http_client_init(&cfg);
+    if (!client) {
+        ESP_LOGE(TAG, "HTTP 客户端创建失败");
         result = RADIO_ERR_CONNECT;
         goto done;
     }
-
-    // 请求行 + 头。用 HTTP/1.0,服务端直接吐原始流,不做 chunked 编码。
-    {
-        const char *path = strchr(url + 7, '/');
-        char req[256];
-        const int rlen = snprintf(req, sizeof(req),
-            "GET %s HTTP/1.0\r\n"
-            "Host: %s\r\n"
-            "User-Agent: AI-Passport-Radio/1.0\r\n"
-            "Icy-MetaData: 1\r\n"
-            "Accept: */*\r\n"
-            "Connection: close\r\n\r\n",
-            path ? path : "/", host);
-        if (send(fd, req, (size_t)rlen, 0) != rlen) { result = RADIO_ERR_CONNECT; goto done; }
+    if (esp_http_client_open(client, 0) != ESP_OK) {
+        ESP_LOGW(TAG, "打开流失败: %s", url);
+        result = RADIO_ERR_CONNECT;
+        goto done;
     }
-
-    // 读响应头(上限 1KB,足够放 status + 几个 ICY 头)
-    {
-        char hdr[1024];
-        size_t hlen = 0;
-        bool aborted = false;
-        while (hlen < sizeof(hdr) - 1) {
-            const int n = recv(fd, (uint8_t *)hdr + hlen, 1, 0);
-            if (n <= 0) {
-                if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) continue;
-                if (s_quit) { aborted = true; break; }
-                result = RADIO_ERR_HTTP;
-                goto done;
-            }
-            hlen += (size_t)n;
-            hdr[hlen] = '\0';
-            if (hlen >= 4 && strstr(hdr, "\r\n\r\n")) break;
-        }
-        if (aborted) goto done;   // s_quit:result 保持 NONE,任务层按切台处理
-        if (!strstr(hdr, "\r\n\r\n") || strncmp(hdr, "HTTP/1.", 7) != 0) { result = RADIO_ERR_HTTP; goto done; }
-        if (strstr(hdr, " 200") == NULL) {
-            ESP_LOGW(TAG, "非 200 响应: %.40s", strchr(hdr, '\r'));
-            result = RADIO_ERR_HTTP;
-            goto done;
-        }
-
-        long metaint = 0;
-        char val[64];
-        if (header_value(hdr, "icy-metaint", val, sizeof(val))) metaint = atol(val);
-        if (header_value(hdr, "icy-br", val, sizeof(val))) {
-            set_snap_stream_info(0, 0, (uint32_t)atoi(val));
-        }
-        if (metaint < 0) metaint = 0;
-        ESP_LOGI(TAG, "已连接 %s, icy-metaint=%ld, 任务栈余量 %u 字节",
-                 host, metaint, (unsigned)(uxTaskGetStackHighWaterMark(s_task) * sizeof(StackType_t)));
-        radio_icy_init(&s_icy, (size_t)metaint);
+    (void)esp_http_client_fetch_headers(client);
+    const int status = esp_http_client_get_status_code(client);
+    if (status < 200 || status >= 300) {
+        ESP_LOGW(TAG, "HTTP 状态码 %d", status);
+        result = RADIO_ERR_HTTP;
+        goto done;
     }
+    radio_icy_init(&s_icy, probe.metaint);
+    ESP_LOGI(TAG, "已连接, icy-metaint=%u, 任务栈余量 %u 字节",
+             (unsigned)probe.metaint,
+             (unsigned)(uxTaskGetStackHighWaterMark(s_task) * sizeof(StackType_t)));
 
     // 换台:清掉"codec 已配好"的记忆,让新台的首帧按**它自己的**采样率
     // 重新 open 一次。不清的话会沿用上一台的采样率,播出来速率错位。
     s_coded_rate = 0;
 
-    // 主循环:每轮先"补桶"再"喂一块"。
-    // 补桶:已开播后用非阻塞 recv 尽力灌到预灌水位(I2S 写阻塞期间网络也在
-    // 进 socket,这里只是把它收进桶);桶空或还没开播才阻塞等——那时反正
-    // 没声音,顺带做 20s 断流判定。喂一块:阻塞在 bsp_audio_write 上按实时走。
-    // 稳态水位钉在预灌线附近,WiFi 抖动由桶深吸收,不再打穿 codec 的 DMA。
     mp3_ctx_t ctx = {
         .dec = dec, .pcm = pcm, .pcm_cap = PCM_BUF_SIZE,
-        .vol = s_req_vol, .audio_started = false, .bad_frames = 0, .write_fails = 0,
+        .vol = s_req_vol, .audio_started = false, .bad_frames = 0,
         .rate = 0, .ch = 0, .logged_head = 0, .logged_err = 0,
     };
-    bool eof = false;      // 对端已关闭:播完桶里剩余就收尾
+
+    // 主循环:桶低于水位就阻塞读一轮(esp_http_client_read 内部等到数据或
+    // 超时),桶里就绪后喂一块——阻塞在 I2S 写上按实时走。稳态水位钉在
+    // 预灌线附近,TCP 抖动由桶深吸收,不再打穿 codec 的 DMA。
+    bool eof = false;      // 对端关闭/服务端停推:播完桶里剩余就收尾
     bool started = false;  // 已开播(过了预灌水位);之前不喂,先攒水
     bool synced = false;   // 已对齐到第一个完整帧头
-    int timeouts = 0;
-    uint8_t c_vol_applied = s_req_vol;   // 已套用到 codec 的音量
+    int timeouts = 0;      // 连续读不到数据(超时)的轮数:断流判定
+    int empty = 0;         // 客户端缓冲连续为空的轮数:服务端停推判定
     size_t fed_total = 0;  // 喂给解码器的总字节数(迟迟解不动的兜底计数)
+    uint8_t c_vol_applied = s_req_vol;   // codec 当前实际套用的音量
     for (;;) {
         if (s_quit) break;
 
-        // ---- 暂停:保持连接、丢弃音频;恢复即从最新流继续(直播语义) ----
+        // 暂停:保持连接,读到的音频直接丢弃;恢复即从最新流继续(直播语义)。
         if (s_paused) {
-            s_lvl = 0;
-            const int nd = sbuf_recv_into(&ring, fd, MSG_DONTWAIT);
-            if (nd > 0) { ring.r = ring.w; timeouts = 0; continue; }   // 丢
-            if (nd == 0) { eof = true; s_paused = false; set_snap(RADIO_STOPPED, RADIO_ERR_NONE); break; }
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) { vTaskDelay(pdMS_TO_TICKS(80)); continue; }
-            ESP_LOGW(TAG, "流读取失败 errno=%d", errno);
+            const int n = esp_http_client_read(client, (char *)feed, FEED_CHUNK);
+            if (n > 0) { s_lvl = 0; timeouts = 0; continue; }
+            if (n == 0) { if (++empty >= 3) { eof = true; } vTaskDelay(pdMS_TO_TICKS(20)); continue; }
             result = RADIO_ERR_CONNECT;
             goto done;
         }
 
-        // ---- 补桶 ----
-        for (;;) {
-            const size_t used = sbuf_used(&ring);
-            const bool blocking = !started || used == 0;
-            if (sbuf_free(&ring) == 0) break;          // 桶满:满不等于 EOF
-            if (!blocking && used >= prefill) break;   // 已开播且到水位:去喂
-            const int n = sbuf_recv_into(&ring, fd, blocking ? 0 : MSG_DONTWAIT);
+        // 补桶:桶低于水位才读(读会阻塞到数据到达;桶里还有料时不读,防饥饿)。
+        // 读进 scratch 后就地剥 ICY 元数据,只有音频字节才进环桶。
+        while (!eof && sbuf_used(&ring) < prefill) {
+            const int n = esp_http_client_read(client, (char *)scratch, FEED_CHUNK);
             if (n > 0) {
-                timeouts = 0;
+                timeouts = 0; empty = 0;
+                size_t alen = 0;
+                for (int i = 0; i < n; i++) {
+                    if (radio_icy_consume(&s_icy, scratch[i]) == RADIO_ICY_AUDIO) {
+                        scratch[alen++] = scratch[i];
+                    }
+                }
+                const char *t = radio_icy_title(&s_icy);
+                if (t[0]) set_title(t);
+                if (alen) sbuf_write(&ring, scratch, alen);
                 continue;
             }
-            if (n == 0) { eof = true; break; }        // 对端关闭
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                if (blocking) {
-                    if (++timeouts >= RX_TIMEOUT_MAX) { result = RADIO_ERR_TIMEOUT; goto done; }
-                    continue;   // SO_RCVTIMEO 到期,重试(断流判定靠计数)
-                }
-                break;          // 非阻塞暂无数据:先喂桶里已有的
+            if (n == 0) {
+                // 客户端缓冲空且网络无数据:连续多轮判定为断流。
+                if (++empty >= 3) { eof = true; break; }
+                vTaskDelay(pdMS_TO_TICKS(20));
+                continue;
             }
             ESP_LOGW(TAG, "流读取失败 errno=%d", errno);
             result = RADIO_ERR_CONNECT;
@@ -605,44 +550,29 @@ static radio_err_t run_one_stream(const char *url, bool *played)
         }
         if (s_quit) break;
 
-        // ---- 喂一块 ----
         const size_t used = sbuf_used(&ring);
         if (used == 0) {
-            if (eof) break;   // 对端已关且桶已清空:流自然结束
+            if (eof) break;
+            vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
-        const size_t n = sbuf_read(&ring, feed,
-                                   used < FEED_CHUNK ? used : FEED_CHUNK);
-        // ICY 解复用(吸收参考实现):元数据字节在这里剥掉,解码器只吃纯音频;
-        // 曲名也从解出的元数据块里取,不再在音频流里暴力扫模式串。
-        size_t audio_len = 0;
-        for (size_t i = 0; i < n; i++) {
-            if (radio_icy_consume(&s_icy, feed[i]) == RADIO_ICY_AUDIO) {
-                feed[audio_len++] = feed[i];
-            }
-        }
-        const char *title = radio_icy_title(&s_icy);
-        if (title[0]) set_title(title);
-        if (audio_len == 0) continue;
-
-        // 流起始对齐:Icecast 从"正在播"的位置开始发,第一批字节常落在帧中间
-        // (实测偏移十几到近百字节)。找到"连续两帧帧头都对得上"的位置,把半截
-        // 帧丢掉再给解码器,避免开头爆音或 init 失败;找不到就原样喂,由解码器
-        // 自己对齐——不在对齐上死等,否则一个不含合法帧头的流永远停在连接中。
+        size_t take = used < FEED_CHUNK ? used : FEED_CHUNK;
+        sbuf_read(&ring, feed, take);
+        // 流起始对齐:Icecast 从"正在播"的位置开始发,第一批字节常落在帧中间。
+        // 找到连续两帧帧头都对得上的位置,把半截帧丢掉再喂解码器。
         if (!synced) {
             size_t skip = 0;
-            if (radio_frame_find(feed, audio_len, RADIO_FRAME_KIND_MP3, &skip)) {
+            if (radio_frame_find(feed, take, RADIO_FRAME_KIND_MP3, &skip)) {
                 if (skip > 0) {
-                    memmove(feed, feed + skip, audio_len - skip);
-                    audio_len -= skip;
+                    memmove(feed, feed + skip, take - skip);
+                    take -= skip;
                     ESP_LOGI(TAG, "跳过开头 %u 字节的半截帧", (unsigned)skip);
                 }
                 synced = true;
             }
         }
-
-        fed_total += audio_len;
-        const radio_err_t de = mp3_feed(&ctx, feed, audio_len);
+        fed_total += take;
+        const radio_err_t de = mp3_feed(&ctx, feed, take);
         // ★ 开播后必须把 started 置位:否则补桶永远按"未开播"阻塞到桶满才喂,
         // 播 250ms 断 ~750ms(64kbps),听感就是锯齿状卡顿——曾因拼接代码丢失
         // 这一行,模拟器与真机同症。
@@ -661,9 +591,10 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     }
 
 done:
-    if (fd >= 0) close(fd);
+    if (client) esp_http_client_cleanup(client);
     esp_audio_simple_dec_close(dec);
     free(feed);
+    free(scratch);
     free(ring_buf);
     free(pcm);
     // 收台:让 codec 回到静音。ES8311 配好格式后会一直按当前采样率输出,

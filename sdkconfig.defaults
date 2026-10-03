@@ -41,6 +41,10 @@ CONFIG_FREERTOS_HZ=1000
 # --- 网络与 TLS ---
 # mbedTLS 证书包:校验 open.bigmodel.cn 证书链(随 IDF 内置根证书)。
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+# 流媒体 TLS 内存画像(对齐参考固件的实测值):16KB 收包缓冲会在
+# https+解码并发时挤爆堆,压到 8KB;发包 4KB 够音频流使用。
+CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=8192
+CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN=4096
 # SNTP 对时(TLS 校验需要正确墙钟),两个服务器互备。
 CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
