@@ -25,10 +25,13 @@ CHARSET_24 = ROOT / "assets" / "fonts" / "radio_charset_24.txt"
 FONT_16 = ROOT / "assets" / "fonts" / "app_font_16.c"
 FONT_24 = ROOT / "assets" / "fonts" / "app_font_24.c"
 
-# 16px 承载的源码:框架 UI + 本应用 UI。
+# 16px 承载的源码:框架 UI + 本应用 UI。必须和 tools/gen_fonts.py 的同名
+# 列表一致 —— 两边都漏掉某个文件,门禁就会跟着一起漏,等于没查。
 SOURCES_16 = [
     FW / "appfw" / "src" / "appfw_ui.c",
     ROOT / "main" / "radio_pages.c",
+    ROOT / "main" / "radio_viz_view.c",
+    ROOT / "main" / "radio_streams.c",
     ROOT / "main" / "main.c",
 ]
 
@@ -41,9 +44,16 @@ def is_checked(ch: str) -> bool:
     return 0x4E00 <= cp <= 0x9FFF or ch in PUNCT
 
 
+def strip_comments(text: str) -> str:
+    """先剥注释再扫字面量:注释里带引号的中文(如"假频谱")不是屏显文案,
+    不剥的话门禁会误报。与 aipassport-appfw 仓的同名门禁行为一致。"""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
+    return re.sub(r"//[^\n]*", "", text)
+
+
 def string_literal_chars(path: Path) -> set[str]:
-    """源码里 C 字符串字面量中出现的中文/全角字符。"""
-    text = path.read_text(encoding="utf-8")
+    """源码里 C 字符串字面量中出现的中文/全角字符(注释已剥离)。"""
+    text = strip_comments(path.read_text(encoding="utf-8"))
     out: set[str] = set()
     for lit in re.findall(r'"((?:[^"\\]|\\.)*)"', text):
         out |= {c for c in lit if is_checked(c)}

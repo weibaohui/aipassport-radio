@@ -9,3 +9,7 @@ managed_components/
 # 重新获取方式见 assets/fonts/README.md。
 
 assets/fonts/NotoSansSC-Regular.otf
+
+# 模拟器构建与输出
+build-sim/
+tools/sim/

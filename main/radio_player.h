@@ -53,4 +53,12 @@ void radio_stop(void);
 void radio_set_volume(uint8_t percent);
 
 // 读取当前状态快照(自旋锁保护,整体拷贝)。out 为 NULL 时忽略。
+// 最近一帧解码 PCM 的整数峰值电平 0..255(下混循环顺带统计,近零成本)。
+// 驱动"假频谱"动画用:只反映响度,不做频率分析。
+uint8_t radio_player_level(void);
+
 void radio_player_snapshot(radio_player_snap_t *out);
+
+// 取频谱快照:bands 个频段的电平(0..255)+ 总电平。由音频线程更新,
+// UI 线程只读,所以直接拷贝、不加锁。
+void radio_player_viz_snapshot(uint8_t *out, uint8_t bands, uint8_t *level);

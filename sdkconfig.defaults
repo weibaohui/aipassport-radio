@@ -24,13 +24,13 @@ CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_DEF_REFR_PERIOD=20
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
-# LVGL 内置 malloc 池大小。单位是字节,直接设 LV_MEM_SIZE。
-# 曾经这里只写了已废弃的 LV_MEM_SIZE_KILOBYTES=24,而 LVGL 9 的 Kconfig 里
-# LV_MEM_SIZE 自带 65536 的默认值,并且"两者都定义时以 LV_MEM_SIZE 为准"——
-# 结果实际生效的是 64KB,白占 40KB RAM,编译时还会打两条 #warning。
-# 收音机解码 MP3 要再吃 40KB,这个偏差直接导致解码器 malloc 失败(-2 MEM_LACK)。
-# 本应用 UI 简单(列表 + 几个 label),24KB 足够;若出现绘制卡死/看门狗,调大此值。
-CONFIG_LV_MEM_SIZE=24576
+# 频谱柱从 32 根减到 16 根之后重新评估过这个值。ESP32-C3 无 PSRAM,DRAM
+# 是硬约束:实测 LV_MEM_SIZE=32KB 时 UI 正常,但 MP3 解码器初始化直接返回
+# ESP_ERR_NO_MEM(串口日志 'Fail to init MP3 decoder ret 10'),音频只剩断续
+# 残帧。解码器要的是几十 KB 连续内存,和 UI 池直接竞争。
+# 所以这里取能建起全部对象的下限,而不是越大越保险 —— UI 侧的余量必须
+# 让给解码器。tools/sim/lv_conf.h 跟着用同样大小,改一处就要改另一处。
+CONFIG_LV_MEM_SIZE=32768
 # 中文界面:UTF-8 编码 + 缺字占位(缺字必须可见,不得静默空白)。
 CONFIG_LV_TXT_ENC_UTF8=y
 CONFIG_LV_USE_FONT_PLACEHOLDER=y

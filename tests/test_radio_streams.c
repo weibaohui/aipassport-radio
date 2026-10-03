@@ -8,18 +8,26 @@
 #include <stdio.h>
 #include <string.h>
 
+// 内置台数量。改动 main/radio_streams.c 的 BUILTIN 数组时必须同步改这里,
+// 否则门禁会在这里 abort —— 这是刻意的:台数变了却没同步测试,说明有人
+// 忘了确认新台是不是都通过了下面的合法性检查。
+#define BUILTIN_N 6
+
 static void test_builtin_list(void)
 {
     radio_list_t l;
     radio_list_builtin(&l);
-    assert(l.count == 2);
-    assert(strstr(l.items[0].url, "http://") == l.items[0].url);
-    assert(strstr(l.items[1].url, "http://") == l.items[1].url);
+    assert(l.count == BUILTIN_N);
+    assert(l.count > 0 && l.count <= RADIO_MAX_STATIONS);
     // 内置台必须能通过合法性检查,否则设备开箱即用就是坏的
     for (uint8_t i = 0; i < l.count; i++) {
+        assert(strstr(l.items[i].url, "http://") == l.items[i].url);
         assert(radio_url_valid(l.items[i].url));
+        assert(l.items[i].name[0] != '\0');
+        // 台名会进 lv_label_set_text(),超长会被截断成看不懂的东西
+        assert(strlen(l.items[i].name) < RADIO_NAME_MAX);
     }
-    printf("  builtin: %u stations, both URLs valid\n", l.count);
+    printf("  builtin: %u stations, all names/URLs valid\n", l.count);
 }
 
 static void test_url_valid(void)

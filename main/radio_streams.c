@@ -3,15 +3,35 @@
 
 #include <string.h>
 
-// 内置台。URL 与 ICY 参数均为 2026-10 从设备所在网络实测:
-//   KEXP 90.3 FM      http://kexp.streamguys1.com/kexp128.mp3     icy-metaint 4096
-//   Radio Paradise    http://stream.radioparadise.com/mp3-128      icy-metaint 16000
-// 两者均为 128kbps / 44.1kHz / 立体声 MP3。同一网络下大量其他公开电台
-// (SomaFM 全部 Icecast 节点、若干欧美 NPR 台站)不可达,因此内置台以实测
-// 为准,不照抄公开列表。
+// 内置台。URL 全部为 2026-10 在设备所在网络逐个实测通过的 http:// 裸 MP3 流。
+//
+// 为什么全是国内台:原内置的 KEXP(西雅图)和 Radio Paradise(加州)都是跨境流,
+// 实测下载速率虽然够(KEXP 220kbps、Paradise 91kbps),但跨境链路的抖动和
+// 首包时延不受控,表现为播放断续。既然目的是"随手能听",就该用本地源。
+//
+// 选台标准(实测数据,两次独立 8s 采样):
+//   - 两次采样都 > 20KB,排除"只回个头就断"
+//   - 实测码率 ≤ 130 kbps。C3 + 32KB LVGL 池的舒适区;实测 AsiaFM 亚洲热歌
+//     231kbps、亚洲经典 170kbps 就偏高,没选
+//   - 字节流里 MP3 同步字 > 200,确认是裸 MP3 而不是 AAC/AAC+/HLS 换壳
+//
+// 已排除的常见候选(都有实测依据,不是拍脑袋):
+//   - ctt.rgd.com.cn(广东各台)  域名已解析不了
+//   - radio.sxtvs.com(陕西)      Empty reply
+//   - 蜻蜓 live/20207761、live/20500195  两次都只回 119 字节
+//   - 所有 *.m3u8 / *.ogg        HLS 和 Ogg 容器,固件没有解封装器,只吃裸 MP3
+//   - 所有 https://              radio_url_valid() 明确拒绝:https 要常驻 TLS
+//                               状态机,本机 DRAM 余量放不下
+//
+// 注意:本文件必须列进 tools/gen_fonts.py 的 SOURCES_16 —— 台名会直接进
+// lv_label_set_text(),漏了就真机上显示成空白。
 static const radio_station_t BUILTIN[] = {
-    { "KEXP 90.3 FM",   "http://kexp.streamguys1.com/kexp128.mp3" },
-    { "Radio Paradise", "http://stream.radioparadise.com/mp3-128"  },
+    { "上海交通广播 FM105.7", "http://lhttp.qingting.fm/live/266/64k.mp3" },
+    { "中国之声",             "http://lhttp.qingting.fm/live/15318317/64k.mp3" },
+    { "上海东广新闻广播",     "http://lhttp.qingting.fm/live/275/64k.mp3" },
+    { "大连音乐广播",         "http://lhttp.qingting.fm/live/1084/64k.mp3" },
+    { "CityFM 城市音乐台",    "http://lhttp.qingting.fm/live/20500153/64k.mp3" },
+    { "三亚旅游之声 103.8",   "http://lhttp.qingting.fm/live/15318203/64k.mp3" },
 };
 #define BUILTIN_N ((uint8_t)(sizeof(BUILTIN) / sizeof(BUILTIN[0])))
 

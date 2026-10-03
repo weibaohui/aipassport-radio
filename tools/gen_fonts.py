@@ -31,13 +31,20 @@ FONTS = ROOT / "assets" / "fonts"
 OTF = FONTS / "NotoSansSC-Regular.otf"
 
 # 16px 承载的源码:框架 UI + 本应用 UI。
+# 凡是会调 lv_label_set_text* 的文件都要列进来 —— 漏一个,那个文件里的
+# 汉字就不在字库里,真机上显示成空白(播放页就踩过这个)。
+# radio_streams.c 也必须在列:电台名直接进 lv_label_set_text(),
+# 不加的话内置台名全是空白。
 SOURCES_16 = [
     FW / "appfw" / "src" / "appfw_ui.c",
     ROOT / "main" / "radio_pages.c",
+    ROOT / "main" / "radio_viz_view.c",
+    ROOT / "main" / "radio_streams.c",
     ROOT / "main" / "main.c",
 ]
-# 24px 只用于顶栏标题,标题在 main.c 的 .home_title。
-SOURCES_24 = [ROOT / "main" / "main.c"]
+# 24px 用于顶栏标题(main.c 的 .home_title)和播放页台名(radio_streams.c 的
+# 电台名)。台名不收进 24px 的话,播放页大字全是方框(2026-10-03 真机踩坑)。
+SOURCES_24 = [ROOT / "main" / "main.c", ROOT / "main" / "radio_streams.c"]
 
 PUNCT = set("，。：；？！（）《》—…·℃─")
 ASCII = "".join(chr(c) for c in range(0x20, 0x7F))
@@ -98,8 +105,23 @@ def main() -> int:
 
     print("推导字符集:")
     write_charset(FONTS / "radio_charset.txt", collect(SOURCES_16))
-    write_charset(FONTS / "radio_charset_24.txt",
-                  {c for c in home_title() if is_checked(c)})
+    write_charset(FONTS / "radio_charset_24.txt", collect(SOURCES_24))
+
+    # 16px 字库的完整码点表(升序),给曲名显示做白名单:流里的歌名是动态
+    # 文本,字库外的字只能显示成方框 —— 显示前直接过滤掉(见 radio_pages.c)。
+    cps = sorted(ord(c) for c in collect(SOURCES_16) if ord(c) > 0x7F)
+    lines = [f"    0x{cp:04X}," for cp in cps]
+    table = (
+        "// 由 tools/gen_fonts.py 自动生成 —— 16px 字库收录的非 ASCII 码点(升序)。\n"
+        "// 曲名等动态文本显示前按此表过滤,字库外的字不进 LVGL(否则是方框)。\n"
+        "#include <stdint.h>\n\n"
+        f"#define RADIO_TITLE_CP_COUNT {len(cps)}\n"
+        "static const uint16_t k_radio_title_cps[RADIO_TITLE_CP_COUNT] = {\n"
+        + "\n".join(lines) + "\n};\n"
+    )
+    out_header = ROOT / "main" / "radio_title_table.h"
+    out_header.write_text(table, encoding="utf-8")
+    print(f"  {out_header.name}: {len(cps)} 个码点")
 
     print("生成字体(需要 npx,首次会下载 lv_font_conv):")
     generate(16, FONTS / "radio_charset.txt", FONTS / "app_font_16.c")
