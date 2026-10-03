@@ -267,7 +267,7 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
         snprintf(s_ch_buf[5], sizeof(s_ch_buf[5]), "MP3 · %u kbps · %u.%u kHz",
                  br, khz, tent);
     } else {
-        snprintf(s_ch_buf[5], sizeof(s_ch_buf[5]), "网络直播");
+        s_ch_buf[5][0] = '\0';   // 无曲名无码率:留空(2026-10-03 定稿,去掉"网络直播")
     }
 
     snprintf(s_ch_buf[7], sizeof(s_ch_buf[7]), "%s",
@@ -321,6 +321,21 @@ static void viz_timer_cb(lv_timer_t *timer)
     static uint32_t chrome_tick;
     if (++chrome_tick % (CHROME_PERIOD_MS / VIZ_PERIOD_MS) == 0) play_chrome(&s);
     radio_viz_view_update(s_play, bands, lvl, s.volume, &s_chrome);
+}
+
+// 框架重建页面前回调(见 appfw_ui_cfg_t::page_reset):旧页面对象即将被删,
+// 把所有挂在上面的把手清空,等 home_build 重建时再重新绑定。
+void radio_pages_page_reset(void)
+{
+    if (s_viz_timer) { lv_timer_del(s_viz_timer); s_viz_timer = NULL; }   // 防重建泄漏
+    memset(s_rows, 0, sizeof(s_rows));
+    s_extra_row = NULL;
+    s_state_label = NULL;
+    s_title_label = NULL;
+    s_vol_label = NULL;
+    s_list_layer = NULL;
+    s_play_layer = NULL;
+    s_play = NULL;
 }
 
 void radio_pages_home_build(lv_obj_t *page)

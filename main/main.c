@@ -111,7 +111,7 @@ void app_main(void)
     static const uint16_t k_vol_opts[] = { 0, 20, 40, 60, 80, 100 };
     static const char *const k_vol_lbls[] = { "0%", "20%", "40%", "60%", "80%", "100%" };
     static const appfw_menu_opt_t k_menu_opts[] = { {
-        .key = "opt_volume", .label = "音量",
+        .key = "opt_volume", .label = "音量", .symbol = LV_SYMBOL_VOLUME_MID,
         .opts = k_vol_opts, .lbls = k_vol_lbls, .count = 6,
         .on_change = apply_volume,
     } };
@@ -129,6 +129,7 @@ void app_main(void)
         .menu_opts = k_menu_opts,
         .menu_opts_count = 1,
         .menu_open_btn = 0xFF,
+        .page_reset = radio_pages_page_reset,
     };
 
     s_key_queue = xQueueCreate(8, sizeof(int));

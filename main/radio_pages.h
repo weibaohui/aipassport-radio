@@ -6,6 +6,9 @@
 // 装配期初始化:载入内置台与用户自加电台。必须在 home_build 之前调用。
 void radio_pages_init(void);
 // 主页:电台列表 + 光标 + 状态区。
+// 框架重建页面前回调:清空应用侧悬空对象把手(见 appfw_ui_cfg_t::page_reset)。
+void radio_pages_page_reset(void);
+
 void radio_pages_home_build(lv_obj_t *page);
 void radio_pages_home_poll(void);
 

@@ -44,7 +44,8 @@ SOURCES_16 = [
 ]
 # 24px 用于顶栏标题(main.c 的 .home_title)和播放页台名(radio_streams.c 的
 # 电台名)。台名不收进 24px 的话,播放页大字全是方框(2026-10-03 真机踩坑)。
-SOURCES_24 = [ROOT / "main" / "main.c", ROOT / "main" / "radio_streams.c"]
+SOURCES_24 = [ROOT / "main" / "main.c", ROOT / "main" / "radio_streams.c",
+              FW / "appfw" / "src" / "appfw_ui.c"]
 
 PUNCT = set("，。：；？！（）《》—…·℃─")
 ASCII = "".join(chr(c) for c in range(0x20, 0x7F))
