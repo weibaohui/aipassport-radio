@@ -47,13 +47,33 @@ SOURCES_16 = [
 SOURCES_24 = [ROOT / "main" / "main.c", ROOT / "main" / "radio_streams.c",
               FW / "appfw" / "src" / "appfw_ui.c"]
 
-PUNCT = set("，。：；？！（）《》—…·℃─")
+# 大清单的台名是运行时数据,但集合是已知的:把清单文件的台名一并收进字库,
+# 否则翻到某个台就是一排方框(2026-10-03 真机踩坑)。文件不在(换机器)时
+# 跳过,字库退回"只覆盖源码"。
+LIST_M3U = Path("/Users/weibh/Desktop/转写/radio-stations/m3u/11-可播放清单.m3u")
+
+
+def list_name_chars(path: Path) -> set[str]:
+    if not path.is_file():
+        print(f"  (跳过台名清单: {path} 不存在)")
+        return set()
+    out: set[str] = set()
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("#EXTINF:") and "," in line:
+            out |= {c for c in line.split(",", 1)[1] if is_checked(c)}
+    return out
+
+
+PUNCT = set("，。：；？！（）《》【】—…·℃─′″")
 ASCII = "".join(chr(c) for c in range(0x20, 0x7F))
 
 
 def is_checked(ch: str) -> bool:
     cp = ord(ch)
-    return 0x4E00 <= cp <= 0x9FFF or ch in PUNCT
+    # CJK 基本区+扩展A、CJK 标点、全角形式、拉丁补充(ü 等)、常用引号破折号。
+    return (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
+            0x3000 <= cp <= 0x303F or 0xFF00 <= cp <= 0xFFEF or
+            0x00C0 <= cp <= 0x00FF or ch in PUNCT)
 
 
 def literal_chars(path: Path) -> set[str]:
@@ -105,12 +125,14 @@ def main() -> int:
         sys.exit(f"缺少源字体 {OTF.name},见 assets/fonts/README.md 的下载命令")
 
     print("推导字符集:")
-    write_charset(FONTS / "radio_charset.txt", collect(SOURCES_16))
-    write_charset(FONTS / "radio_charset_24.txt", collect(SOURCES_24))
+    names = list_name_chars(LIST_M3U)
+    print(f"  台名额外贡献 {len(names)} 字")
+    write_charset(FONTS / "radio_charset.txt", collect(SOURCES_16) | names)
+    write_charset(FONTS / "radio_charset_24.txt", collect(SOURCES_24) | names)
 
     # 16px 字库的完整码点表(升序),给曲名显示做白名单:流里的歌名是动态
     # 文本,字库外的字只能显示成方框 —— 显示前直接过滤掉(见 radio_pages.c)。
-    cps = sorted(ord(c) for c in collect(SOURCES_16) if ord(c) > 0x7F)
+    cps = sorted(ord(c) for c in collect(SOURCES_16) | names if ord(c) > 0x7F)
     lines = [f"    0x{cp:04X}," for cp in cps]
     table = (
         "// 由 tools/gen_fonts.py 自动生成 —— 16px 字库收录的非 ASCII 码点(升序)。\n"
