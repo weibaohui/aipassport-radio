@@ -153,6 +153,9 @@ void radio_store_init(void)
 int radio_store_count(void)
 {
     if (radio_biglist_poll()) return radio_biglist_count();
+    // 大清单模式粘住(见 radio_biglist_available):临时读不到(FAT 被挤、
+    // 上传中)返回缓存的条数,绝不静默掉回 48 台出厂清单。
+    if (radio_biglist_available()) return radio_biglist_count();
     // 大清单在运行中被删除(恢复出厂/手动)后回落小清单:开机时走大清单
     // 分支没读过 NVS 条数,这里捡一次。
     static bool picked;

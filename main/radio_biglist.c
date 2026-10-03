@@ -7,6 +7,7 @@
 
 #include "appfw_files.h"
 #include "appfw_net.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 
@@ -36,6 +37,8 @@ static uint32_t s_prev_sz;          // 上一轮轻探到的文件大小(判断"
 static bool s_prev_valid;
 static bool s_borrowed;             // 本次挂载借了解码器预留的洞(要还)
 static int64_t s_last_read_us;      // 最近一次文件读(借洞 10s 无读即归还)
+static bool s_ever_avail;           // 大清单曾经就绪:模式粘住,临时读不到
+                                    // 也不掉回 NVS 小清单(恢复出厂才复位)
 
 static void path_of(const char *name, char *out, size_t cap)
 {
@@ -65,6 +68,10 @@ static bool fat_open(void)
     const int64_t now = esp_timer_get_time();
     if (s_mount_fail_us != 0 && now - s_mount_fail_us < 10LL * 1000000LL)
         return false;
+    // 挂载要 ~8KB 连续堆:不够就直接借洞,别"先失败一次再借"——失败的
+    // 挂载会漏磨损均衡句柄(上限 8,漏光 FAT 瘫到重启,真机踩过)。
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) < 12 * 1024)
+        radio_player_release_reserve();
     if (appfw_files_ensure_mounted()) { s_mount_fail_us = 0; return true; }
     radio_player_release_reserve();
     if (!appfw_files_ensure_mounted()) {
@@ -258,8 +265,9 @@ bool radio_biglist_poll(void)
     if (!fm) {
         radio_player_snap_t ps;
         radio_player_snapshot(&ps);
-        if (ps.state == RADIO_CONNECTING || ps.state == RADIO_PLAYING)
-            return s_avail;
+        // 连接/播放/出错期间轮询只报缓存条数,绝不发起挂载——错误态内存
+        // 最紧,此时挂载必失败还漏 WL 句柄;真正的读(用户翻列表)另有入口。
+        if (ps.state != RADIO_STOPPED) return s_ever_avail;
     }
     if (!fm && fat_open()) fm = fopen(pm3u, "rb");
     if (!fm) {
@@ -306,13 +314,20 @@ bool radio_biglist_poll(void)
     s_m3u_size = (uint32_t)sz;
     s_count = n;
     s_avail = true;
+    s_ever_avail = true;
     ESP_LOGI(TAG, "大清单就绪:%u 台(%ld 字节)", (unsigned)n, sz);
     return true;
 }
 
-bool radio_biglist_available(void) { return s_avail; }
+// 粘住:曾经就绪就永远算大清单模式。临时读不到(FAT 被解码器挤掉、
+// 上传中)返回 true + 缓存条数,绝不静默掉回 48 台出厂清单——那是用户
+// 误以为"清单丢了"的根源。恢复出厂经 discard() 复位。
+bool radio_biglist_available(void) { return s_ever_avail; }
 
-int radio_biglist_count(void) { return s_avail ? (int)s_count : 0; }
+int radio_biglist_count(void)
+{
+    return (s_avail || s_ever_avail) ? (int)s_count : 0;
+}
 
 bool radio_biglist_get(int idx, radio_station_t *out)
 {
@@ -406,6 +421,7 @@ void radio_biglist_discard(void)
     s_avail = false;
     s_count = 0;
     s_m3u_size = 0;
+    s_ever_avail = false;              // 恢复出厂:真正退回小清单
     s_miss_check_us = INT64_MIN;
     (void)appfw_files_unmount();
     ESP_LOGI(TAG, "大清单已删除,退回小清单");
