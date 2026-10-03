@@ -112,6 +112,8 @@ static char s_req_name[RADIO_URL_MAX > 32 ? 32 : RADIO_URL_MAX];
 static char s_req_url[RADIO_URL_MAX];
 static volatile bool s_req_pending;
 static volatile uint8_t s_req_vol = 55;
+static volatile bool s_paused;              // 暂停:保持连接,丢弃音频
+static volatile uint8_t s_applied_vol;      // codec 当前实际套用的音量
 // ICY 解复用器:只有收听任务访问(见 radio_icy.c,移植自 shulinbao/ai-passport-radio)。
 // 元数据字节在这里被剥掉,解码器只吃纯音频;曲名从解出的元数据块里取。
 static radio_icy_t s_icy;
@@ -559,9 +561,23 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     bool started = false;  // 已开播(过了预灌水位);之前不喂,先攒水
     bool synced = false;   // 已对齐到第一个完整帧头
     int timeouts = 0;
+    uint8_t c_vol_applied = s_req_vol;   // 已套用到 codec 的音量
     size_t fed_total = 0;  // 喂给解码器的总字节数(迟迟解不动的兜底计数)
     for (;;) {
         if (s_quit) break;
+
+        // ---- 暂停:保持连接、丢弃音频;恢复即从最新流继续(直播语义) ----
+        if (s_paused) {
+            s_lvl = 0;
+            const int nd = sbuf_recv_into(&ring, fd, MSG_DONTWAIT);
+            if (nd > 0) { ring.r = ring.w; timeouts = 0; continue; }   // 丢
+            if (nd == 0) { eof = true; s_paused = false; set_snap(RADIO_STOPPED, RADIO_ERR_NONE); break; }
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) { vTaskDelay(pdMS_TO_TICKS(80)); continue; }
+            ESP_LOGW(TAG, "流读取失败 errno=%d", errno);
+            result = RADIO_ERR_CONNECT;
+            goto done;
+        }
 
         // ---- 补桶 ----
         for (;;) {
@@ -633,13 +649,12 @@ static radio_err_t run_one_stream(const char *url, bool *played)
         if (ctx.audio_started) {
             started = true;
             if (played) *played = true;
-        } else if (fed_total > (256u * 1024u)) {
-            // 兜底:几十 KB 还解不出第一帧,说明解码器内部已经放弃(AUD_SDEC
-            // 报错达限后会把后续调用全部吞成 OK+0 字节),必须主动了断,
-            // 否则就是一把无声的死循环——真机刷屏 ret 10 时正是这个形态。
-            ESP_LOGE(TAG, "喂入 %u 字节仍解不出首帧,放弃", (unsigned)fed_total);
-            result = RADIO_ERR_DECODE;
-            goto done;
+        }
+        // 音量套用的安全点:两次 I2S 写之间,不与 codec 设备层并发。
+        if (ctx.audio_started && c_vol_applied != s_req_vol) {
+            c_vol_applied = s_req_vol;
+            ctx.vol = s_req_vol;
+            bsp_audio_set_volume(s_req_vol);
         }
         if (de != RADIO_ERR_NONE) { result = de; goto done; }
         timeouts = 0;
@@ -753,6 +768,7 @@ int radio_player_start(void)
 void radio_play(const char *name, const char *url)
 {
     if (!url) { radio_stop(); return; }
+    s_paused = false;
     portENTER_CRITICAL(&s_lock);
     if (name) snprintf(s_req_name, sizeof(s_req_name), "%s", name);
     snprintf(s_req_url, sizeof(s_req_url), "%s", url);
@@ -764,6 +780,7 @@ void radio_play(const char *name, const char *url)
 
 void radio_stop(void)
 {
+    s_paused = false;
     portENTER_CRITICAL(&s_lock);
     s_req_url[0] = '\0';
     s_req_pending = true;
@@ -777,12 +794,23 @@ void radio_set_volume(uint8_t percent)
     const uint8_t v = percent > 100 ? 100 : percent;
     s_req_vol = v;
     portENTER_CRITICAL(&s_lock);
+    const bool busy = (s_snap.state == RADIO_PLAYING || s_snap.state == RADIO_PAUSED);
     s_snap.volume = v;
     portEXIT_CRITICAL(&s_lock);
-    bsp_audio_set_volume(v);
+    // 播放中绝不从这里并发调 esp_codec_dev(与收听任务的 esp_codec_dev_write
+    // 撞在 codec 内部锁上,系统整体静默楔死,连 panic 都没有——真机实测)。
+    // 收听任务在两次写块之间套用 s_req_vol;未播放时 codec 未打开,直接设安全。
+    if (!busy) bsp_audio_set_volume(v);
 }
 
 uint8_t radio_player_level(void) { return s_lvl; }
+
+void radio_player_toggle_pause(void)
+{
+    if (s_snap.state != RADIO_PLAYING && s_snap.state != RADIO_PAUSED) return;
+    s_paused = !s_paused;
+    set_snap(s_paused ? RADIO_PAUSED : RADIO_PLAYING, RADIO_ERR_NONE);
+}
 
 void radio_player_snapshot(radio_player_snap_t *out)
 {

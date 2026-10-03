@@ -230,8 +230,8 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->status = flat_label(v->root, font16, C_OK, v->w - MARGIN_X * 2,
                            MARGIN_X, STATUS_Y, "");
     v->hint   = wrap_label(v->root, font16, C_HINT, v->w - MARGIN_X * 2, 38,
-                           MARGIN_X, HINT_Y, "上下选台  OK播放  长按换台\n"
-                                             "双击上一台  长按调音量");
+                           MARGIN_X, HINT_Y, "上下切台  OK 暂停/继续\n"
+                                             "长按 OK 回选台列表  音量在设置里");
 
     lv_obj_set_user_data(v->root, v);
     return v->root;

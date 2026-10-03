@@ -14,6 +14,7 @@ typedef enum {
     RADIO_STOPPED = 0,  // 未在收听
     RADIO_CONNECTING,   // 正在解析地址/建连/读响应头
     RADIO_PLAYING,      // 正常解码播放
+    RADIO_PAUSED,       // 已暂停(连接保持,恢复即接最新流)
     RADIO_ERROR,        // 出错(见 err_code)
 } radio_state_t;
 
@@ -56,6 +57,9 @@ void radio_set_volume(uint8_t percent);
 // 最近一帧解码 PCM 的整数峰值电平 0..255(下混循环顺带统计,近零成本)。
 // 驱动"假频谱"动画用:只反映响度,不做频率分析。
 uint8_t radio_player_level(void);
+
+// 暂停/继续(播放页 OK)。暂停 = 保持连接但丢弃音频,恢复即接最新流。
+void radio_player_toggle_pause(void);
 
 void radio_player_snapshot(radio_player_snap_t *out);
 

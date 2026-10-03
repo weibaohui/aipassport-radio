@@ -361,7 +361,7 @@ void radio_pages_home_build(lv_obj_t *page)
     s_vol_label = lv_label_create(s_list_layer);
     style(s_vol_label, &s_f16, 0x6E7A86);
     lv_obj_set_pos(s_vol_label, 14, 284);
-    lv_label_set_text_fmt(s_vol_label, "音量 %u%%   长按上下键调整", s_vol);
+    lv_label_set_text_fmt(s_vol_label, "音量 %u%%   设置菜单可调", s_vol);
 
     // 播放页浮层
     s_play_layer = radio_viz_view_create(page, &s_f16, &s_f24);
@@ -383,6 +383,7 @@ static const char *state_text(const radio_player_snap_t *s)
     switch (s->state) {
     case RADIO_CONNECTING: return "正在连接…";
     case RADIO_PLAYING:    return "正在收听";
+    case RADIO_PAUSED:     return "已暂停";
     case RADIO_ERROR:
         switch (s->err_code) {
         case RADIO_ERR_URL:     return "地址不合法";
@@ -501,14 +502,20 @@ static void toggle_station(int idx)
 appfw_key_action_t radio_pages_home_key(int btn, int ev)
 {
     const int total = total_rows();
+
+    // 长按 OK:任何页面回选台列表(播放中浏览,播放继续)。
+    if (ev == 3) {
+        if (btn == 2 && s_page == PAGE_PLAY) s_page = PAGE_LIST;
+        return APPFW_KEY_CONSUMED;
+    }
+
     switch (ev) {
     case 0: // 单击
         if (s_page == PAGE_PLAY) {
-            // 播放页:上下=上一台/下一台(界面提示写的"上下选台");
-            // OK 回列表,不停播。
+            // 播放页:上下切台;OK 暂停/继续。
             if (btn == 0) step_station(-1);
             else if (btn == 1) step_station(+1);
-            else if (btn == 2) s_page = PAGE_LIST;
+            else if (btn == 2) radio_player_toggle_pause();
             return APPFW_KEY_CONSUMED;
         }
         if (btn == 0) { s_sel = (s_sel - 1 + total) % total; return APPFW_KEY_CONSUMED; }
@@ -519,17 +526,9 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
             return APPFW_KEY_CONSUMED;
         }
         return APPFW_KEY_CONSUMED;
-    case 2: // 双击:上一台
-        if (btn == 2) { step_station(-1); return APPFW_KEY_CONSUMED; }
-        return APPFW_KEY_CONSUMED;
-    case 3: // 长按
-        // 写回 NVS:设置菜单的「音量」当前值才不会与实际音量脱节。
-        if (btn == 0) { s_vol = s_vol >= 100 ? 0 : (uint8_t)(s_vol + 5); radio_set_volume(s_vol); appfw_store_set_u16("opt_volume", s_vol); return APPFW_KEY_CONSUMED; }
-        if (btn == 1) { s_vol = s_vol <= 5 ? 100 : (uint8_t)(s_vol - 5); radio_set_volume(s_vol); appfw_store_set_u16("opt_volume", s_vol); return APPFW_KEY_CONSUMED; }
-        if (btn == 2) { step_station(+1); return APPFW_KEY_CONSUMED; }   // 下一台
-        return APPFW_KEY_CONSUMED;
     default:
-        return APPFW_KEY_CONSUMED;  // 其余事件不惊动框架
+        // 双击等其余事件不再承担功能(按 2026-10-03 定稿:上下选台/OK 播放/长按回列表)。
+        return APPFW_KEY_CONSUMED;
     }
 }
 
@@ -651,7 +650,7 @@ const char *radio_pages_app_config_html(void)
     "</div>\n"
     "<script>\n"
     "function radioMsg(s,e){const x=$('rmsg');if(x)x.innerHTML='<small class='+(e?'err':'ok')+'>'+s+'</small>';}\n"
-    "const RNAMES=['未在收听','正在连接','正在收听','出错'];\n"
+    "const RNAMES=['未在收听','正在连接','正在收听','已暂停','出错'];\n"
     "function radioNow(st){\n"
     "  if(!st||!st.station){$('rnow').textContent='—';return;}\n"
     "  $('rnow').textContent=esc((RNAMES[st.state]||'?')+' '+st.station+(st.title?' — '+st.title:''));\n"
