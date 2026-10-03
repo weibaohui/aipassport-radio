@@ -152,10 +152,12 @@ void radio_store_init(void)
 
 int radio_store_count(void)
 {
-    if (radio_biglist_poll()) return radio_biglist_count();
+    // 大清单模式:内置精品台永远排最前,导入清单跟在后面(不整体覆盖)。
+    const int base = radio_builtin_count();
+    if (radio_biglist_poll()) return base + radio_biglist_count();
     // 大清单模式粘住(见 radio_biglist_available):临时读不到(FAT 被挤、
     // 上传中)返回缓存的条数,绝不静默掉回 48 台出厂清单。
-    if (radio_biglist_available()) return radio_biglist_count();
+    if (radio_biglist_available()) return base + radio_biglist_count();
     // 大清单在运行中被删除(恢复出厂/手动)后回落小清单:开机时走大清单
     // 分支没读过 NVS 条数,这里捡一次。
     static bool picked;
@@ -176,13 +178,24 @@ bool radio_store_readonly(void) { return radio_biglist_available(); }
 bool radio_store_get(int idx, radio_station_t *out)
 {
     if (!out) return false;
-    if (radio_biglist_available()) return radio_biglist_get(idx, out);
+    if (radio_biglist_available()) {
+        const int base = radio_builtin_count();
+        if (idx < base) return radio_builtin_get(idx, out);   // 内置在前
+        return radio_biglist_get(idx - base, out);
+    }
     return get_entry(idx, out);
 }
 
 int radio_store_find(const char *name)
 {
-    if (radio_biglist_available()) return radio_biglist_find(name);
+    if (radio_biglist_available()) {
+        radio_station_t b;
+        for (int i = 0; i < radio_builtin_count(); i++) {
+            if (radio_builtin_get(i, &b) && strcmp(b.name, name) == 0) return i;
+        }
+        const int i = radio_biglist_find(name);
+        return i >= 0 ? i + radio_builtin_count() : -1;
+    }
     return find_entry(name);
 }
 
