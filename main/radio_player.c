@@ -12,6 +12,7 @@
 
 #include "appfw_files.h"
 #include "bsp_audio.h"
+#include "esp_wifi.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_heap_caps.h"
@@ -250,6 +251,7 @@ static int hls_advance(esp_http_client_handle_t client)
     int depth = 0;                 // 变体流(m3u8 套 m3u8)最多展开一层
     for (int attempt = 0; attempt < 20; attempt++) {
         if (hls_fetch(client, s_hls.playlist, s_pl_buf, HLS_TEXT_CAP) <= 0) {
+            ESP_LOGW(TAG, "[hls] 取列表失败 attempt=%d", attempt);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
@@ -260,6 +262,8 @@ static int hls_advance(esp_http_client_handle_t client)
                                          &pick);
         if (!ok) {
             if (pick.endlist && s_hls.started) { s_hls.vod_done = true; return 0; }
+            ESP_LOGW(TAG, "[hls] 无新段 last_seq=%llu attempt=%d",
+                     (unsigned long long)s_hls.last_seq, attempt);
             vTaskDelay(pdMS_TO_TICKS(1000));   // 直播追新:每秒重查一次列表
             continue;
         }
@@ -276,15 +280,19 @@ static int hls_advance(esp_http_client_handle_t client)
         }
         esp_http_client_set_url(client, pick.seg_url);
         if (esp_http_client_open(client, 0) != ESP_OK) {
+            ESP_LOGW(TAG, "[hls] 段 open 失败:%.60s", pick.seg_url);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
         (void)esp_http_client_fetch_headers(client);
         const int status = esp_http_client_get_status_code(client);
         if (status < 200 || status >= 300) {
+            ESP_LOGW(TAG, "[hls] 段 HTTP %d:%.60s", status, pick.seg_url);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
+        ESP_LOGI(TAG, "[hls] 段就绪 seq=%llu:%.60s",
+                 (unsigned long long)pick.media_seq, pick.seg_url);
         s_hls.seg_open = true;
         s_hls.started = true;
         s_hls.last_seq = pick.media_seq;
@@ -301,14 +309,23 @@ static int src_read(esp_http_client_handle_t client, uint8_t *out, size_t cap)
     if (!s_hls.active) {
         return esp_http_client_read(client, (char *)out, (int)cap);
     }
+    int stalls = 0;                // 连续取不到新段(含取列表失败)的轮数
     for (;;) {
         if (s_hls.seg_open) {
             const int n = esp_http_client_read(client, (char *)out, (int)cap);
             if (n > 0) return n;
-            s_hls.seg_open = false;    // 段到头:换下一段
-        }
+            ESP_LOGI(TAG, "[hls] 段结束(%d),回收连接换段", n);
+            s_hls.seg_open = false;
+            esp_http_client_close(client);   // CDN 常在段后掐断 keep-alive:
+        }                                    // 不回收,后续 open 全在死连接上失败
         if (s_hls.vod_done) return 0;
-        if (hls_advance(client) <= 0 && s_hls.vod_done) return 0;
+        const int adv = hls_advance(client);
+        if (adv > 0) { stalls = 0; continue; }
+        if (s_hls.vod_done) return 0;
+        if (++stalls >= 3) {
+            ESP_LOGW(TAG, "[hls] 连续 %d 轮取段失败,整流重启", stalls);
+            return -1;
+        }
     }
 }
 
@@ -629,6 +646,9 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     // 60KB 才回得来;没挂载时 unmount 是无操作。
     appfw_files_unmount();
     reacquire_reserve_force();
+    // WiFi 退出省电(modem sleep):内存紧张时 PS 模式的突发收包会被压到
+    // 几 KB/s,HLS 直播流(段 200KB/10s)必断。播音期间不需要省电。
+    esp_wifi_set_ps(WIFI_PS_NONE);
     // 解码器预留块先行释放:helix 初始化要 ~20KB 连续堆,先给它腾地方。
     if (s_dec_reserve) {
         free(s_dec_reserve);
