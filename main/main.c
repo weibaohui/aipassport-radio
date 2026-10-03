@@ -51,6 +51,11 @@ static void key_task(void *arg)
     }
 }
 
+static void apply_volume(uint16_t percent)
+{
+    radio_set_volume((uint8_t)percent);
+}
+
 static bool portal_ready(void *httpd)
 {
     return radio_pages_portal_register(httpd);
@@ -84,7 +89,10 @@ void app_main(void)
     if (bsp_audio_init() != ESP_OK) {
         ESP_LOGW(TAG, "音频初始化失败,收听将不可用");
     }
-    radio_set_volume(55);
+    // 音量:设置菜单(框架应用选项页)里选过的值优先;没存过用 55。
+    uint16_t vol = 55;
+    appfw_store_get_u16("opt_volume", &vol, 55);
+    radio_set_volume((uint8_t)vol);
 
     appfw_netlist_t list;
     if (!appfw_store_netlist_load(&list)) appfw_netlist_reset(&list);
@@ -99,6 +107,15 @@ void app_main(void)
     // 载入电台列表(内置 + 用户自加),必须在建页之前。
     radio_pages_init();
 
+    // 音量进框架设置菜单(应用选项页):6 档,选中即存 NVS 并生效。
+    static const uint16_t k_vol_opts[] = { 0, 20, 40, 60, 80, 100 };
+    static const char *const k_vol_lbls[] = { "0%", "20%", "40%", "60%", "80%", "100%" };
+    static const appfw_menu_opt_t k_menu_opts[] = { {
+        .key = "opt_volume", .label = "音量",
+        .opts = k_vol_opts, .lbls = k_vol_lbls, .count = 6,
+        .on_change = apply_volume,
+    } };
+
     const appfw_ui_cfg_t ucfg = {
         .home_title = "网络收音机",
         .home_build = radio_pages_home_build,
@@ -108,6 +125,10 @@ void app_main(void)
         .app_config_html  = radio_pages_app_config_html,
         .app_config_apply = radio_pages_app_config_apply,
         .app_config_fill  = radio_pages_app_config_fill,
+        // 音量交给框架设置菜单;主页按键全被 home_key 接管,默认入口关掉。
+        .menu_opts = k_menu_opts,
+        .menu_opts_count = 1,
+        .menu_open_btn = 0xFF,
     };
 
     s_key_queue = xQueueCreate(8, sizeof(int));

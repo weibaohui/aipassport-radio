@@ -523,8 +523,9 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
         if (btn == 2) { step_station(-1); return APPFW_KEY_CONSUMED; }
         return APPFW_KEY_CONSUMED;
     case 3: // 长按
-        if (btn == 0) { s_vol = s_vol >= 100 ? 0 : (uint8_t)(s_vol + 5); radio_set_volume(s_vol); return APPFW_KEY_CONSUMED; }
-        if (btn == 1) { s_vol = s_vol <= 5 ? 100 : (uint8_t)(s_vol - 5); radio_set_volume(s_vol); return APPFW_KEY_CONSUMED; }
+        // 写回 NVS:设置菜单的「音量」当前值才不会与实际音量脱节。
+        if (btn == 0) { s_vol = s_vol >= 100 ? 0 : (uint8_t)(s_vol + 5); radio_set_volume(s_vol); appfw_store_set_u16("opt_volume", s_vol); return APPFW_KEY_CONSUMED; }
+        if (btn == 1) { s_vol = s_vol <= 5 ? 100 : (uint8_t)(s_vol - 5); radio_set_volume(s_vol); appfw_store_set_u16("opt_volume", s_vol); return APPFW_KEY_CONSUMED; }
         if (btn == 2) { step_station(+1); return APPFW_KEY_CONSUMED; }   // 下一台
         return APPFW_KEY_CONSUMED;
     default:
@@ -600,6 +601,11 @@ void radio_pages_init(void)
 {
     s_sel = 0;
     s_off = 0;
+    // 音量与设置菜单(框架应用选项页)同源:两边都读写 opt_volume,
+    // 开机读回一次,列表页的"音量 N%"才不会和实际音量脱节。
+    uint16_t vol = 55;
+    appfw_store_get_u16("opt_volume", &vol, 55);
+    s_vol = (uint8_t)vol;
     load_user();
 }
 
