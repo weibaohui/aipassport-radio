@@ -18,6 +18,17 @@
 // 接口给空实现(主机测试不连 radio_player.c)。
 void radio_player_release_reserve(void) {}
 void radio_player_reacquire_reserve(void) {}
+void radio_player_snapshot(radio_player_snap_t *s)
+{
+    s->station[0] = '\0';
+    s->title[0] = '\0';
+    s->state = RADIO_STOPPED;
+    s->err_code = RADIO_ERR_NONE;
+    s->sample_rate = 0;
+    s->channels = 0;
+    s->bitrate = 0;
+    s->volume = 50;
+}
 
 // ---------------------------------------------------------------- 内存 NVS
 

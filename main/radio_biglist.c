@@ -56,12 +56,23 @@ static void copy_trunc(char *dst, size_t cap, const char *src, size_t len)
 
 // FAT 挂载(~9KB 连续堆)与 60KB 解码器预留装不进同一个堆:预留让位再
 // 挂载(借洞);poll 里空闲 10s 卸载并把预留补回。设备上挂载失败十有八九
-// 是预留握着最大块,放掉就能过。
+// 是预留握着最大块,放掉就能过。失败退避 10s:失败的挂载会漏磨损均衡
+// 句柄(上限 8 个,漏光前必须少试)。
+static int64_t s_mount_fail_us;
+
 static bool fat_open(void)
 {
-    if (appfw_files_ensure_mounted()) return true;
+    const int64_t now = esp_timer_get_time();
+    if (s_mount_fail_us != 0 && now - s_mount_fail_us < 10LL * 1000000LL)
+        return false;
+    if (appfw_files_ensure_mounted()) { s_mount_fail_us = 0; return true; }
     radio_player_release_reserve();
-    if (!appfw_files_ensure_mounted()) return false;
+    if (!appfw_files_ensure_mounted()) {
+        s_mount_fail_us = now;
+        ESP_LOGW(TAG, "FAT 挂载失败,10s 内不再试");
+        return false;
+    }
+    s_mount_fail_us = 0;
     s_borrowed = true;
     return true;
 }
@@ -241,6 +252,15 @@ bool radio_biglist_poll(void)
     char pm3u[48];
     m3u_path(pm3u, sizeof(pm3u));
     FILE *fm = fopen(pm3u, "rb");
+    // 播放/连接期间不发起挂载:FAT 未挂载时轮询只报缓存条数,别去和
+    // 解码器抢内存(挂载失败还漏 WL 句柄)。用户按键切台的 get 单发,
+    // 不走这里。
+    if (!fm) {
+        radio_player_snap_t ps;
+        radio_player_snapshot(&ps);
+        if (ps.state == RADIO_CONNECTING || ps.state == RADIO_PLAYING)
+            return s_avail;
+    }
     if (!fm && fat_open()) fm = fopen(pm3u, "rb");
     if (!fm) {
         // 没有大清单:退回小清单,别让 FAT(≈8KB)常驻占播放/TLS 的内存。

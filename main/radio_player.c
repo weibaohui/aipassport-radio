@@ -964,9 +964,19 @@ void radio_play(const char *name, const char *url)
 {
     if (!url) { radio_stop(); return; }
     s_paused = false;
+    // https 的 HLS 在这台机器必然内存不足(TLS ~16KB + AAC 60KB 两个连续块
+    // 装不下,实测 mbedtls_ssl_setup -0x7F00):一律按 http 请求。国内电台
+    // CDN 普遍双协议;只有 https 的 HLS 台会连不上,界面如实报错。
+    char u[RADIO_URL_MAX];
+    snprintf(u, sizeof(u), "%s", url);
+    if (strncmp(u, "https://", 8) == 0 && strstr(u, ".m3u8")) {
+        memmove(u + 7, u + 8, strlen(u) - 8 + 1);   // 去掉 s,少一个 '/'
+        memcpy(u, "http://", 7);
+        ESP_LOGI(TAG, "HLS 降级 http:%s", u);
+    }
     portENTER_CRITICAL(&s_lock);
     if (name) snprintf(s_req_name, sizeof(s_req_name), "%s", name);
-    snprintf(s_req_url, sizeof(s_req_url), "%s", url);
+    snprintf(s_req_url, sizeof(s_req_url), "%s", u);
     s_req_pending = true;
     portEXIT_CRITICAL(&s_lock);
     s_quit = true;                 // 唤醒任务并让它放弃当前流
