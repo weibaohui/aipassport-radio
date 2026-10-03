@@ -30,6 +30,10 @@ bool radio_store_get(int idx, radio_station_t *out);
 // 按台名找下标(逐条读 flash 线性扫,最坏 48 次小读);未找到 -1。
 int radio_store_find(const char *name);
 
+// 大清单模式(/files/radio.m3u 就绪)为只读:count/get/find 委托文件清单,
+// 增删改一律拒绝——在电脑上编辑 m3u 后经门户「文件管理」重新上传。
+bool radio_store_readonly(void);
+
 // 追加;同名视为改地址(含改内置台地址)。非法/已满返回 false。
 bool radio_store_add(const char *name, const char *url);
 

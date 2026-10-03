@@ -1,3 +1,5 @@
 # 主机测试源文件映射:<stem> <源文件...>(相对仓库根)
-# test_radio_store.c 需要 radio_store + 它依赖的 m3u 解析与 URL 校验。
-radio_store main/radio_store.c main/radio_m3u.c main/radio_streams.c
+# test_radio_store.c 需要 radio_store + 它依赖的 m3u 解析与 URL 校验;
+# radio_biglist 是大清单(files 分区 m3u+索引),radio_store 会委托给它。
+radio_store main/radio_store.c main/radio_biglist.c main/radio_m3u.c main/radio_streams.c
+radio_biglist main/radio_biglist.c

@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "appfw_files.h"
 #include "bsp_audio.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
@@ -92,6 +93,7 @@ static size_t s_arena_used;
 // 解码器预留块:helix MP3 首次解码要一次性 malloc ~20KB 连续堆,播放开始时
 // 释放这块给它,播完再收回。开机时与 arena 一起预留(总量 47KB)。
 static uint8_t *s_dec_reserve;
+static void reacquire_reserve_force(void);   // 连接/收尾路径补回预留(定义在后)
 static uint8_t *audio_arena_take(size_t len)
 {
     if (!s_arena || s_arena_used + len > 20 * 1024) return NULL;
@@ -623,6 +625,10 @@ static radio_err_t run_one_stream(const char *url, bool *played)
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
         return RADIO_ERR_DECODE;
     }
+    // 大清单"借洞挂载"期间预留不在手上(FAT 占着 ~9KB):先让文件库归还,
+    // 60KB 才回得来;没挂载时 unmount 是无操作。
+    appfw_files_unmount();
+    reacquire_reserve_force();
     // 解码器预留块先行释放:helix 初始化要 ~20KB 连续堆,先给它腾地方。
     if (s_dec_reserve) {
         free(s_dec_reserve);
@@ -809,21 +815,44 @@ static radio_err_t run_one_stream(const char *url, bool *played)
 done:
     if (client) esp_http_client_cleanup(client);
     esp_audio_simple_dec_close(dec);
-    if (!s_dec_reserve) {
-        for (size_t sz = 60 * 1024;; sz -= 4 * 1024) {
-            s_dec_reserve = malloc(sz);
-            if (s_dec_reserve || sz <= 8 * 1024) {
-                if (s_dec_reserve) ESP_LOGI(TAG, "解码器预留块已恢复 %uKB", (unsigned)(sz / 1024));
-                break;
-            }
-        }
-    }
+    reacquire_reserve_force();
     // 收台:让 codec 回到静音。ES8311 配好格式后会一直按当前采样率输出,
     // 不 mute 的话最后一帧的余音会在扬声器里拖出去,切台时"咔"一下。
     bsp_audio_set_volume(0);
     s_coded_rate = 0;
 
     return result;
+}
+
+void radio_player_release_reserve(void)
+{
+    if (s_dec_reserve) {
+        free(s_dec_reserve);
+        s_dec_reserve = NULL;
+        ESP_LOGI(TAG, "解码器预留块已释放(让位)");
+    }
+}
+
+// 无条件补回(连接流程内部用:那时快照还显示"连接中",不能做状态检查)。
+static void reacquire_reserve_force(void)
+{
+    if (s_dec_reserve) return;
+    size_t got = 0;
+    for (size_t sz = 60 * 1024; sz >= 8 * 1024; sz -= 4 * 1024) {
+        if ((s_dec_reserve = malloc(sz))) { got = sz; break; }
+    }
+    if (got) ESP_LOGI(TAG, "解码器预留块已恢复(%uKB)", (unsigned)(got / 1024));
+}
+
+// 尽量把解码器预留块补回 60KB。文件库用完卸载后调用;播放/连接中不补
+// (预留块本来就该让位,播放停了再补)。
+void radio_player_reacquire_reserve(void)
+{
+    if (s_dec_reserve) return;
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    if (s.state == RADIO_CONNECTING || s.state == RADIO_PLAYING) return;
+    reacquire_reserve_force();
 }
 
 // ---------------------------------------------------------------- 任务

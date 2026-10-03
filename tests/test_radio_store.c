@@ -7,11 +7,17 @@
 #include "appfw_storage.h"
 #include "radio_m3u.h"
 #include "radio_m3u_default.h"
+#include "radio_player.h"
 
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// radio_store 委托的 radio_biglist 在主机桩上恒"未挂载借洞",播放器预留
+// 接口给空实现(主机测试不连 radio_player.c)。
+void radio_player_release_reserve(void) {}
+void radio_player_reacquire_reserve(void) {}
 
 // ---------------------------------------------------------------- 内存 NVS
 

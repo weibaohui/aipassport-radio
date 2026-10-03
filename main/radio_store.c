@@ -8,6 +8,7 @@
 #include "appfw_storage.h"
 #include "esp_log.h"
 
+#include "radio_biglist.h"
 #include "radio_m3u.h"
 #include "radio_m3u_default.h"
 
@@ -111,6 +112,14 @@ static void materialize_builtin(void)
 
 void radio_store_init(void)
 {
+    // 大清单优先:files 分区里有 radio.m3u 就完全忽略 NVS 旧键(休眠不删,
+    // 恢复出厂删文件后可退回)。RAM 里依旧只有一个条数。
+    radio_biglist_init();   // 复位节流标记(静态初值 0 会被误当"刚探过没有")
+    if (radio_biglist_poll()) {
+        ESP_LOGI(TAG, "大清单模式:%d 台(NVS 清单休眠)", radio_biglist_count());
+        return;
+    }
+
     uint16_t n = 0;
     if (appfw_store_get_u16(STORE_CNT_KEY, &n, 0xFFFF) &&
         n != 0xFFFF && n <= RADIO_MAX_STATIONS) {
@@ -141,21 +150,42 @@ void radio_store_init(void)
     ESP_LOGI(TAG, "清单落盘完成:%u 台", (unsigned)s_count);
 }
 
-int radio_store_count(void) { return (int)s_count; }
+int radio_store_count(void)
+{
+    if (radio_biglist_poll()) return radio_biglist_count();
+    // 大清单在运行中被删除(恢复出厂/手动)后回落小清单:开机时走大清单
+    // 分支没读过 NVS 条数,这里捡一次。
+    static bool picked;
+    if (!picked) {
+        picked = true;
+        uint16_t n = 0;
+        if (appfw_store_get_u16(STORE_CNT_KEY, &n, 0xFFFF) && n != 0xFFFF &&
+            n <= RADIO_MAX_STATIONS && n > 0) {
+            s_count = (uint8_t)n;
+            ESP_LOGI(TAG, "退回小清单:%u 台", (unsigned)s_count);
+        }
+    }
+    return (int)s_count;
+}
+
+bool radio_store_readonly(void) { return radio_biglist_available(); }
 
 bool radio_store_get(int idx, radio_station_t *out)
 {
     if (!out) return false;
+    if (radio_biglist_available()) return radio_biglist_get(idx, out);
     return get_entry(idx, out);
 }
 
 int radio_store_find(const char *name)
 {
+    if (radio_biglist_available()) return radio_biglist_find(name);
     return find_entry(name);
 }
 
 bool radio_store_add(const char *name, const char *url)
 {
+    if (radio_biglist_available()) return false;   // 大清单只读,拒绝静默成功
     if (!name || !url) return false;
     const size_t nlen = strlen(name);
     if (nlen == 0 || nlen >= RADIO_NAME_MAX) return false;
@@ -181,6 +211,7 @@ bool radio_store_add(const char *name, const char *url)
 
 bool radio_store_remove(int idx)
 {
+    if (radio_biglist_available()) return false;
     radio_station_t st;
     if (!get_entry(idx, &st)) return false;
     if (radio_store_is_builtin(st.name, st.url)) return false;
@@ -202,6 +233,7 @@ bool radio_store_remove(int idx)
 
 void radio_store_import_begin(void)
 {
+    if (radio_biglist_available()) return;   // 大清单只读:门户导入整体跳过
     char key[8];
     for (int i = 0; i < (int)s_count; i++) {
         key_of(i, key, sizeof(key));
@@ -214,6 +246,8 @@ void radio_store_import_begin(void)
 int radio_store_restore_factory(void)
 {
     radio_m3u_stats_t st = { 0 };
+    // 大清单也算用户数据:恢复出厂 = 删 m3u/索引退回小清单,再物化出厂清单。
+    if (radio_biglist_available()) radio_biglist_discard();
     radio_store_import_begin();
     materialize_builtin();
     radio_m3u_parse(RADIO_M3U_DEFAULT, NULL, store_accept_http,

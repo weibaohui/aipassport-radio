@@ -62,6 +62,13 @@ static bool portal_ready(void *httpd)
     return radio_pages_portal_register(httpd);
 }
 
+// 门户启动前腾内存(覆盖框架弱符号):httpd 任务/控制块/路由表要 ~10KB,
+// 而 60KB 解码器预留正好握在手里。释放它;下次开播会自动重新预留。
+void appfw_portal_pre_start_hook(void)
+{
+    radio_player_release_reserve();
+}
+
 static void second_tick_cb(void *arg)
 {
     (void)arg;
@@ -71,7 +78,8 @@ static void second_tick_cb(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "网络收音机(appfw)启动");
-    radio_player_reserve();   // 最早预留大块连续内存(WiFi/LVGL 会碎片化堆)
+    radio_player_reserve();   // 最早预留 60KB 连续块(WiFi/LVGL 会碎片化堆)。
+                              // 大清单的 FAT 用"借洞"方式与此共存,见 radio_biglist。
     bsp_i2c_init();
     (void)bsp_battery_init();
 
@@ -102,12 +110,13 @@ void app_main(void)
     if (net_err != 0) {
         ESP_LOGW(TAG, "WiFi 初始化返回 %d", net_err);
     }
+    // 载入电台列表(要在建页之前)。大清单模式下第一次 count 会"借洞"挂载
+    // files 分区 FAT 建索引,空闲 10s 后自动卸载把预留补回。
+    radio_pages_init();
+
     if (radio_player_start() != 0) {
         ESP_LOGE(TAG, "收听任务启动失败");
     }
-
-    // 载入电台列表(内置 + 用户自加),必须在建页之前。
-    radio_pages_init();
 
     // 音量进框架设置菜单(应用选项页):6 档,选中即存 NVS 并生效。
     static const uint16_t k_vol_opts[] = { 0, 20, 40, 60, 80, 100 };
@@ -135,6 +144,7 @@ void app_main(void)
     };
 
     s_key_queue = xQueueCreate(8, sizeof(int));
+
     if (s_key_queue &&
         xTaskCreate(key_task, "app_input", 6144, NULL, 5, NULL) == pdPASS &&
         bsp_button_init(on_key_from_bsp, NULL) == ESP_OK) {
@@ -158,8 +168,10 @@ void app_main(void)
         .on_httpd_ready   = portal_ready,
     };
     appfw_prov_configure(&pcfg);
-    // 门户不再开机常启:httpd 按需(见 appfw_ui_second_tick)——没联网时 1 秒内
-    // 自动拉起等人配网;联网后空转 10 分钟自动下线,内存让给播放与 TLS。
+    // 门户按需(见 appfw_ui_second_tick 与设置菜单「WEB管理」):没联网时
+    // 1 秒内自动拉起等人配网;联网后想用网页管理,进「设置→WEB管理」——
+    // 留在该页 httpd 就开着,离页立即卸载;300s 无请求也会自动下线。
+    // httpd 启动前 appfw_portal_pre_start_hook 会释放 60KB 解码器预留。
 
     esp_timer_handle_t tick;
     const esp_timer_create_args_t ta = { .callback = second_tick_cb, .name = "tick" };

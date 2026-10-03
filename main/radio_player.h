@@ -43,6 +43,13 @@ typedef struct {
 // 启动收听任务(常驻)。成功返回 0。
 int radio_player_start(void);
 
+// 放弃 60KB 解码器预留块(给门户 httpd 启动腾内存)。下次开播会自动
+// 重新预留(拿不到就按 4KB 递减,能拿多少用多少)。
+void radio_player_release_reserve(void);
+
+// 把预留块补回来(文件库用完卸载后调用)。播放/连接中不补。
+void radio_player_reacquire_reserve(void);
+
 // 切台。传入台名仅用于显示;url 必须是合法的 http:// 流地址。
 // 立即返回:真正建连在任务里做。任何时刻可调用,内部会中止上一次收听。
 void radio_play(const char *name, const char *url);
