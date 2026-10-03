@@ -17,6 +17,7 @@
 #include "bsp_button.h"
 #include "bsp_display.h"
 #include "bsp_i2c.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -70,6 +71,7 @@ static void second_tick_cb(void *arg)
 void app_main(void)
 {
     ESP_LOGI(TAG, "网络收音机(appfw)启动");
+    radio_player_reserve();   // 最早预留大块连续内存(WiFi/LVGL 会碎片化堆)
     bsp_i2c_init();
     (void)bsp_battery_init();
 
@@ -156,11 +158,14 @@ void app_main(void)
         .on_httpd_ready   = portal_ready,
     };
     appfw_prov_configure(&pcfg);
-    (void)appfw_portal_start();
+    // 门户不再开机常启:httpd 按需(见 appfw_ui_second_tick)——没联网时 1 秒内
+    // 自动拉起等人配网;联网后空转 10 分钟自动下线,内存让给播放与 TLS。
 
     esp_timer_handle_t tick;
     const esp_timer_create_args_t ta = { .callback = second_tick_cb, .name = "tick" };
     if (esp_timer_create(&ta, &tick) == ESP_OK) esp_timer_start_periodic(tick, 1000000);
 
-    ESP_LOGI(TAG, "启动完成:net=%d", net_err);
+    ESP_LOGI(TAG, "启动完成:net=%d heap=%u largest=%u", net_err,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 }

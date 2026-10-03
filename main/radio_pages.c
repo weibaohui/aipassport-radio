@@ -9,6 +9,7 @@
 #include <time.h>
 
 #include "appfw_client.h"
+#include "appfw_ui.h"
 #include "appfw_net.h"
 #include "appfw_portal.h"
 #include "appfw_storage.h"
@@ -20,9 +21,8 @@
 #include "esp_log.h"
 #include "lvgl.h"
 
-#include "radio_m3u.h"
-#include "radio_m3u_default.h"
 #include "radio_player.h"
+#include "radio_store.h"
 #include "radio_streams.h"
 #include "radio_viz_view.h"
 
@@ -36,13 +36,13 @@ LV_FONT_DECLARE(app_font_24);
 #define LIST_Y        50
 #define ROW_X         14                      // 行左边距
 #define ROW_W         212                     // 行宽
-#define EXTRA_ROWS    1                       // 列表末尾的「设置」行
-#define NVS_M3U_KEY   "radio_m3u"             // 用户电台清单(M3U 文本,定稿格式)
-#define M3U_BUF_SIZE  (12 * 1024)             // M3U 文本缓冲(48 台约 6KB,留倍)
 
-static radio_list_t s_list;
+// 清单本体在 flash(radio_store,逐条 NVS);这里只留光标/窗口和一个条数缓存。
+// 常驻 RAM 的清单副本已全部移除(旧实现 5 份 × 6.2KB ≈ 31KB 静态内存)。
 static int s_sel;                             // 选中下标 0..count-1,count=设置行
 static int s_off;                             // 滚动窗口起始
+static int s_cur_idx = -1;                    // 正在播的台下标缓存(开播时更新;
+                                              // 与播放器台名对不上就退回全表查找)
 static uint8_t s_vol = 55;
 
 // 主页有两层:电台列表,以及盖在它上面的频谱播放页。框架只给一个 home page
@@ -52,7 +52,6 @@ static radio_page_t s_page;
 
 // 主页控件
 static lv_obj_t *s_rows[LIST_MAX];
-static lv_obj_t *s_extra_row;
 static lv_obj_t *s_state_label;
 static lv_obj_t *s_title_label;
 static lv_obj_t *s_vol_label;
@@ -121,24 +120,15 @@ int radio_pages_cursor(void) { return s_sel; }
 
 // ---------------------------------------------------------------- 列表
 
-static int total_rows(void) { return (int)s_list.count + EXTRA_ROWS; }
-
-// 把「用户自加电台」并入列表(同名覆盖)。
-static void merge_user(const radio_list_t *user)
-{
-    for (uint8_t i = 0; i < user->count; i++) {
-        if (!radio_list_add(&s_list, user->items[i].name, user->items[i].url)) {
-            ESP_LOGW(TAG, "用户电台被丢弃(非法或已满): %s", user->items[i].name);
-        }
-    }
-}
+static int station_count(void) { return radio_store_count(); }
+static int total_rows(void) { return station_count(); }
 
 static void clamp_cursor(void)
 {
     const int total = total_rows();
     if (s_sel >= total) s_sel = total - 1;
     if (s_sel < 0) s_sel = 0;
-    if (s_off > (int)s_list.count - LIST_MAX) s_off = (int)s_list.count - LIST_MAX;
+    if (s_off > station_count() - LIST_MAX) s_off = station_count() - LIST_MAX;
     if (s_off < 0) s_off = 0;
     if (s_sel < s_off) s_off = s_sel;
     if (s_sel >= s_off + LIST_MAX) s_off = s_sel - LIST_MAX + 1;
@@ -332,7 +322,6 @@ void radio_pages_page_reset(void)
 {
     if (s_viz_timer) { lv_timer_del(s_viz_timer); s_viz_timer = NULL; }   // 防重建泄漏
     memset(s_rows, 0, sizeof(s_rows));
-    s_extra_row = NULL;
     s_state_label = NULL;
     s_title_label = NULL;
     s_vol_label = NULL;
@@ -359,9 +348,6 @@ void radio_pages_home_build(lv_obj_t *page)
         lv_label_set_long_mode(s_rows[i], LV_LABEL_LONG_DOT);
     }
 
-    s_extra_row = lv_label_create(s_list_layer);
-    row_style(s_extra_row, LIST_MAX, false);
-
     s_state_label = lv_label_create(s_list_layer);
     style(s_state_label, &s_f16, 0x8B98A5);
     lv_label_set_long_mode(s_state_label, LV_LABEL_LONG_DOT);
@@ -387,7 +373,6 @@ void radio_pages_home_build(lv_obj_t *page)
     if (!s_play) {
         ESP_LOGE(TAG, "播放页创建失败");
     } else {
-        s_play->show_peak = false;   // 假频谱不做频率分析,不占用频率刻度
         s_viz_timer = lv_timer_create(viz_timer_cb, VIZ_PERIOD_MS, NULL);
     }
 
@@ -438,33 +423,28 @@ void radio_pages_home_poll(void)
     }
 
     clamp_cursor();
+    const int count = station_count();
     for (int i = 0; i < LIST_MAX; i++) {
         const int idx = s_off + i;
-        if (idx >= (int)s_list.count) { hide_row(s_rows[i]); continue; }
+        radio_station_t st;                    // 128B,栈上;画哪行读哪条
+        if (idx >= count || !radio_store_get(idx, &st)) { hide_row(s_rows[i]); continue; }
         // LVGL 9 的 LV_SYMBOL_* 是字符串(不是单字符码),必须用 %s 拼。
         char text[RADIO_NAME_MAX + 24];
         const bool playing = (s.state == RADIO_PLAYING || s.state == RADIO_CONNECTING) &&
-                             strcmp(s.station, s_list.items[idx].name) == 0;
+                             strcmp(s.station, st.name) == 0;
         snprintf(text, sizeof(text), "%s %s%s",
                  (idx == s_sel) ? LV_SYMBOL_RIGHT : " ",
                  playing ? LV_SYMBOL_PLAY " " : "",
-                 s_list.items[idx].name);
+                 st.name);
         show_row(s_rows[i], text);
         row_style(s_rows[i], i, idx == s_sel);
-    }
-    {
-        char text[24];
-        snprintf(text, sizeof(text), "%s %s",
-                 s_sel == (int)s_list.count ? LV_SYMBOL_RIGHT : " ", "设置");
-        show_row(s_extra_row, text);
-        row_style(s_extra_row, LIST_MAX, s_sel == (int)s_list.count);
     }
 
     lv_label_set_text(s_state_label, state_text(&s));
     if (s.title[0]) sanitize_title(s.title, s_title_buf, sizeof(s_title_buf));
     else s_title_buf[0] = '\0';
     lv_label_set_text(s_title_label, s_title_buf);
-    lv_label_set_text_fmt(s_vol_label, "音量 %u%%   长按上下键调整", s.volume);
+    lv_label_set_text_fmt(s_vol_label, "音量 %u%%  长按:上设置 下音量", s.volume);
     const uint32_t col = (s.state == RADIO_ERROR) ? 0xE5484D
                        : (s.state == RADIO_PLAYING) ? 0x35C26B : 0x8B98A5;
     lv_obj_set_style_text_color(s_state_label, lv_color_hex(col), 0);
@@ -485,19 +465,24 @@ void radio_pages_home_poll(void)
 // 0=单击 2=双击 3=长按,按下瞬间已被框架丢弃)。
 static void step_station(int delta)
 {
-    if (s_list.count == 0) return;
+    const int n = station_count();
+    if (n == 0) return;
     radio_player_snap_t s;
     radio_player_snapshot(&s);
 
-    int cur = -1;
-    for (uint8_t i = 0; i < s_list.count; i++) {
-        if (s.station[0] && strcmp(s_list.items[i].name, s.station) == 0) { cur = i; break; }
+    // 先信下标缓存(开播时已记),对不上台名再全表按名找——正常换台只读 2 条。
+    radio_station_t st;
+    int cur = s_cur_idx;
+    if (cur < 0 || cur >= n || !radio_store_get(cur, &st) ||
+        strcmp(st.name, s.station) != 0) {
+        cur = radio_store_find(s.station);
     }
-    const int n = (int)s_list.count;
     const int next = (cur < 0)
                    ? (delta > 0 ? 0 : n - 1)                       // 没在听就从两端起
                    : ((cur + delta) % n + n) % n;
-    radio_play(s_list.items[next].name, s_list.items[next].url);
+    if (!radio_store_get(next, &st)) return;
+    radio_play(st.name, st.url);
+    s_cur_idx = next;
     s_sel = next;            // 光标跟着正在播的台走:列表高亮与 CH 号才不会说谎
     clamp_cursor();
     s_page = PAGE_PLAY;
@@ -505,15 +490,18 @@ static void step_station(int delta)
 
 static void toggle_station(int idx)
 {
-    if (idx < 0 || idx >= (int)s_list.count) return;
+    radio_station_t st;
+    if (idx < 0 || idx >= station_count()) return;
+    if (!radio_store_get(idx, &st)) return;
     radio_player_snap_t s;
     radio_player_snapshot(&s);
     if (s.state != RADIO_STOPPED && s.state != RADIO_ERROR &&
-        strcmp(s.station, s_list.items[idx].name) == 0) {
+        strcmp(s.station, st.name) == 0) {
         radio_stop();
         return;
     }
-    radio_play(s_list.items[idx].name, s_list.items[idx].url);
+    radio_play(st.name, st.url);
+    s_cur_idx = idx;
     s_page = PAGE_PLAY;      // 开始播就切到频谱页,不然按了 OK 看不到反应
 }
 
@@ -521,9 +509,13 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
 {
     const int total = total_rows();
 
-    // 长按 OK:任何页面回选台列表(播放中浏览,播放继续)。
+    // 长按快捷键(列表/播放页都生效)。上千台时列表尾部的「设置」行根本
+    // 翻不到,所以列表里不再放设置行,固定:
+    //   长按上 = 设置菜单   长按下 = 音量页   长按 OK = 选台列表
     if (ev == 3) {
-        if (btn == 2 && s_page == PAGE_PLAY) s_page = PAGE_LIST;
+        if (btn == 0) return APPFW_KEY_MENU;               // 框架动作:进设置菜单
+        if (btn == 1) { appfw_ui_open_app_option(0); return APPFW_KEY_CONSUMED; }
+        if (btn == 2) { s_page = PAGE_LIST; return APPFW_KEY_CONSUMED; }
         return APPFW_KEY_CONSUMED;
     }
 
@@ -539,7 +531,6 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
         if (btn == 0) { s_sel = (s_sel - 1 + total) % total; return APPFW_KEY_CONSUMED; }
         if (btn == 1) { s_sel = (s_sel + 1) % total; return APPFW_KEY_CONSUMED; }
         if (btn == 2) {
-            if (s_sel == (int)s_list.count) return APPFW_KEY_MENU;  // 「设置」行
             toggle_station(s_sel);
             return APPFW_KEY_CONSUMED;
         }
@@ -552,99 +543,31 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
 
 // ---------------------------------------------------------------- 持久化
 
-// 与内置台完全一致(同名同址)的项不算用户自加。存进去会让门户把内置台
-// 也列成"自加电台",还会把内置地址冻结住,以后改了内置源用户这边不会跟着变。
-static bool is_builtin_exact(const char *name, const char *url)
+// 清单持久化整体移交 radio_store(逐条 NVS):本文件不再持有任何整表副本。
+// 门户导入的"内置台兜底"沿用旧语义——列表里没有的内置台补回来,同名自改
+// 地址的不动。
+static void ensure_builtin_present(void)
 {
-    static radio_list_t b;   // 1KB,别放栈上:调用方可能在 httpd 任务里
-    radio_list_builtin(&b);
-    for (uint8_t i = 0; i < b.count; i++) {
-        if (strcmp(b.items[i].name, name) == 0 && strcmp(b.items[i].url, url) == 0) return true;
+    radio_station_t b;
+    for (int i = 0; i < radio_builtin_count(); i++) {
+        if (!radio_builtin_get(i, &b)) continue;
+        if (radio_store_find(b.name) < 0 && !radio_store_add(b.name, b.url)) {
+            ESP_LOGW(TAG, "内置台补回失败(列表已满?): %s", b.name);
+        }
     }
-    return false;
-}
-
-// 用户自加电台以 JSON 数组存一条 NVS 记录;格式稳定,便于导出与迁移。
-static void save_user(void)
-{
-    // 只存非内置台(内置台在代码里,存进去会随固件漂移),格式 M3U。
-    struct radio_m3u_entry *e = malloc(sizeof(*e) * s_list.count);
-    char *txt = e ? malloc((size_t)s_list.count * 160 + 32) : NULL;
-    if (!e || !txt) {
-        ESP_LOGW(TAG, "保存清单失败(内存不足)");
-        free(e);
-        free(txt);
-        return;
-    }
-    uint8_t n = 0;
-    for (uint8_t i = 0; i < s_list.count; i++) {
-        if (is_builtin_exact(s_list.items[i].name, s_list.items[i].url)) continue;
-        snprintf(e[n].name, sizeof(e[n].name), "%s", s_list.items[i].name);
-        snprintf(e[n].url, sizeof(e[n].url), "%s", s_list.items[i].url);
-        n++;
-    }
-    const size_t len = radio_m3u_serialize(e, n, txt, (size_t)s_list.count * 160 + 32);
-    if (len) {
-        (void)appfw_store_set_str(NVS_M3U_KEY, txt);
-    } else if (n == 0) {
-        (void)appfw_store_set_str(NVS_M3U_KEY, "");   // 空清单=清键,下次回落出厂
-    } else {
-        ESP_LOGW(TAG, "M3U 序列化失败(缓冲不足)");
-    }
-    free(e);
-    free(txt);
-}
-
-// 这几个局部量合计约 3KB,而 app_main 跑在 main 任务上,栈只有 3584 字节
-// (CONFIG_ESP_MAIN_TASK_STACK_SIZE)。放栈上会直接触发 stack protection fault,
-// 所以一律 static:这里本来就是启动期跑一次的初始化/刷新路径。
-// M3U 导入筛选(应用策略):播放器能力 = http/https 直链;HLS(.m3u8)暂不支持。
-static bool radio_m3u_accept_http(const char *name, const char *url, void *user)
-{
-    (void)name; (void)user;
-    return (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
-           && strstr(url, ".m3u8") == NULL;
-}
-
-// M3U 条目并入电台列表(查重/容量由 radio_list_add 处理)。
-static void radio_m3u_merge_cb(void *user, const char *name, const char *url)
-{
-    radio_list_add((radio_list_t *)user, name, url);
-}
-
-static void load_user(void)
-{
-    static radio_list_t builtin;   // 启动期一次性,静态省栈(app_main 栈仅 3.5KB)
-    radio_list_builtin(&builtin);
-    s_list = builtin;
-
-    // 用户台清单以 M3U 文本持久化。无记录(新机/换清单前)时回落到固件
-    // 内嵌的出厂清单(RADIO_M3U_DEFAULT);出厂清单只展示不落盘——首次
-    // 保存(增删台/导入)才写入 NVS。
-    char *buf = malloc(M3U_BUF_SIZE);
-    radio_m3u_stats_t st = { 0 };
-    if (buf && appfw_store_get_str(NVS_M3U_KEY, buf, M3U_BUF_SIZE) && buf[0]) {
-        radio_m3u_parse(buf, NULL, radio_m3u_accept_http, &s_list, radio_m3u_merge_cb, &st);
-        ESP_LOGI(TAG, "已载入用户 M3U:%d 台(合计 %u)", st.accepted, s_list.count);
-    }
-    if (st.accepted == 0) {
-        // 无用户清单(或空):回落固件内嵌出厂清单。出厂清单只展示不落盘。
-        radio_m3u_parse(RADIO_M3U_DEFAULT, NULL, radio_m3u_accept_http, &s_list, radio_m3u_merge_cb, &st);
-        ESP_LOGI(TAG, "使用出厂清单:%d 台(合计 %u)", st.accepted, s_list.count);
-    }
-    free(buf);
 }
 
 void radio_pages_init(void)
 {
     s_sel = 0;
     s_off = 0;
+    s_cur_idx = -1;
     // 音量与设置菜单(框架应用选项页)同源:两边都读写 opt_volume,
     // 开机读回一次,列表页的"音量 N%"才不会和实际音量脱节。
     uint16_t vol = 55;
     appfw_store_get_u16("opt_volume", &vol, 55);
     s_vol = (uint8_t)vol;
-    load_user();
+    radio_store_init();
 }
 
 // ---------------------------------------------------------------- 设备信息
@@ -656,7 +579,7 @@ int radio_pages_info_rows(char (*keys)[16], char (*vals)[72], int max)
     radio_player_snapshot(&s);
     if (n < max) {
         snprintf(keys[n], 16, "电台数");
-        snprintf(vals[n], 72, "%u 个", (unsigned)s_list.count);
+        snprintf(vals[n], 72, "%d 个", station_count());
         n++;
     }
     if (n < max) {
@@ -674,11 +597,11 @@ const char *radio_pages_app_config_html(void)
     return ""
     "<div class=\"card\"><h2>0 · 应用配置(网络收音机)</h2>\n"
     "<div style=\"margin:2px 0 8px;color:#9fb0bf;font-size:13px\">"
-    "内置两台已实测可达的英文电台(KEXP / Radio Paradise)。"
-    "当前网络下多数境外电台不可达,你可以在这里填自己的流地址。"
-    "下列列表就是设备屏幕上的那份,序号一致。</div>\n"
+    "清单共 48 台:内置 6 台 + 出厂 42 台,全部为实测可达的直链电台。"
+    "你可以在这里增删改,或填自己的流地址(http/https 直链均可,"
+    "HLS .m3u8 暂不支持)。下面就是设备屏幕上的那份,序号一致。</div>\n"
     "<input type=\"text\" id=\"rname\" placeholder=\"电台名称(必填)\">\n"
-    "<input type=\"text\" id=\"rurl\" placeholder=\"http://主机/流路径.mp3(必须 http://)\">\n"
+    "<input type=\"text\" id=\"rurl\" placeholder=\"http:// 或 https:// 主机/流路径.mp3\">\n"
     "<button onclick=\"radioAdd()\">添加</button>\n"
     "<div id=\"rmsg\"></div>\n"
     "<ul id=\"rlist\" style=\"padding-left:18px\"></ul>\n"
@@ -694,8 +617,9 @@ const char *radio_pages_app_config_html(void)
     "  if(!st||!st.station){$('rnow').textContent='—';return;}\n"
     "  $('rnow').textContent=esc((RNAMES[st.state]||'?')+' '+st.station+(st.title?' — '+st.title:''));\n"
     "}\n"
-    "function radioRender(list){\n"
+    "function radioRender(list,trunc){\n"
     "  const u=$('rlist');\n"
+    "  const head=trunc?'<li>\u6e05\u5355\u8fc7\u957f,\u4ec5\u663e\u793a\u524d\u6bb5(\u5b8c\u6574\u6e05\u5355\u89c1\u8bbe\u5907)</li>':'';\n"
     "  u.innerHTML=(list||[]).map((s,i)=>'<li>'+(s.builtin?'<b>'+esc(s.name)+'</b>':'esc(s.name)')\n"
     "     +' — <small>'+esc(s.url)+'</small> '\n"
     "     +'<a href=\"#\" onclick=\"radioPlay('+i+');return false\">播放</a>'\n"
@@ -705,17 +629,17 @@ const char *radio_pages_app_config_html(void)
     "async function radioAdd(){\n"
     "  const name=$('rname').value.trim(),url=$('rurl').value.trim();\n"
     "  if(!name||!url){radioMsg('名称与地址都要填',1);return;}\n"
-    "  if(url.indexOf('http://')!==0){radioMsg('只支持 http:// 开头(本机内存放不下 TLS)',1);return;}\n"
+    "  if(url.indexOf('http://')!==0&&url.indexOf('https://')!==0){radioMsg('要 http:// 或 https:// 开头的直链',1);return;}\n"
     "  const r=await jpost('/api/radio',{op:'add',name:name,url:url});\n"
     "  if(r.ok){radioMsg('已添加: '+name,0);$('rname').value='';$('rurl').value='';}\n"
     "  else radioMsg(r.error||'添加失败',1);\n"
-    "  radioRender(r.stations);\n"
+    "  radioRender(r.stations,r.stations_truncated);\n"
     "}\n"
     "async function radioDel(i){\n"
     "  if(!confirm('删除第 '+(i+1)+' 个电台?'))return;\n"
     "  const r=await jpost('/api/radio',{op:'del',index:i});\n"
     "  if(r.ok)radioMsg('已删除',0);else radioMsg(r.error||'删除失败',1);\n"
-    "  radioRender(r.stations);\n"
+    "  radioRender(r.stations,r.stations_truncated);\n"
     "}\n"
     "async function radioPlay(i){\n"
     "  const r=await jpost('/api/radio',{op:'play',index:i});\n"
@@ -730,7 +654,7 @@ const char *radio_pages_app_config_html(void)
     "  try{const r=await jpost('/api/radio',{op:'state'});radioNow(r.status);}catch(e){}\n"
     "  setTimeout(radioPoll,5000);\n"
     "}\n"
-    "(async()=>{try{const s=await jget('/api/status');radioRender(s.stations);}catch(e){}})();\n"
+    "(async()=>{try{const r=await jpost('/api/radio',{op:'list'});radioRender(r.stations,r.stations_truncated);}catch(e){}})();\n"
     "radioPoll();\n"
     "</script>\n";
 }
@@ -738,21 +662,11 @@ const char *radio_pages_app_config_html(void)
 void radio_pages_app_config_fill(void *obj)
 {
     cJSON *root = (cJSON *)obj;
-    cJSON *arr = cJSON_CreateArray();
-    if (!arr) return;
-    // 回显**完整列表**(内置 + 自加),因为 play/del 的 index 就是按这份列表算的。
-    // 早先这里只回显自加台,而 del/play 却按下标打到合并后的列表上,
-    // 于是"删除第 1 个自加电台"实际删掉的是内置台,而"播放第 1 台"放的是内置第 1 台。
-    // 两份列表、一种下标,这类不一致只能靠让两边看到同一份数据来根治。
-    for (uint8_t i = 0; i < s_list.count; i++) {
-        cJSON *o = cJSON_CreateObject();
-        if (!o) continue;
-        cJSON_AddStringToObject(o, "n", s_list.items[i].name);
-        cJSON_AddStringToObject(o, "u", s_list.items[i].url);
-        cJSON_AddBoolToObject(o, "builtin", is_builtin_exact(s_list.items[i].name, s_list.items[i].url));
-        cJSON_AddItemToArray(arr, o);
-    }
-    cJSON_AddItemToObject(root, "stations", arr);
+    // 框架的 /api/status 与 /api/config/export 不再携带整份清单:48 台的
+    // cJSON 树+打印要 15-25KB 瞬时堆,这台机器给不起(实测间歇 500)。
+    // 清单回显走应用私有端点 /api/radio {op:"list"}(手拼 JSON 文本,~6KB);
+    // 清单本体在逐条 NVS(radio_store),导出/导入不覆盖它。
+    cJSON_AddItemToObject(root, "stations", cJSON_CreateArray());
 }
 
 bool radio_pages_app_config_apply(void *root_obj)
@@ -760,27 +674,23 @@ bool radio_pages_app_config_apply(void *root_obj)
     cJSON *arr = cJSON_GetObjectItemCaseSensitive((cJSON *)root_obj, "stations");
     if (!cJSON_IsArray(arr)) return true;   // 没有该字段 = 不改电台
 
-    // 同样不放栈上:这里由门户导入调用,跑在 httpd 任务里。
-    static radio_list_t builtin;
-    static radio_list_t user;
-    radio_list_builtin(&builtin);
-    radio_list_reset(&user);
+    // 整表替换:先清空再按导入顺序逐条装回(下标即门户看到的序号)。
+    // 逐条直写 flash,不再经由任何整表副本。
+    radio_store_import_begin();
     const cJSON *o = NULL;
     cJSON_ArrayForEach(o, arr) {
         const cJSON *n = cJSON_GetObjectItemCaseSensitive(o, "n");
         const cJSON *u = cJSON_GetObjectItemCaseSensitive(o, "u");
         if (!cJSON_IsString(n) || !cJSON_IsString(u)) continue;
-        if (!radio_list_add(&user, n->valuestring, u->valuestring)) {
+        if (!radio_store_add(n->valuestring, u->valuestring)) {
             ESP_LOGW(TAG, "导入时丢弃非法电台: %s", n->valuestring);
         }
     }
-
-    s_list = builtin;
-    merge_user(&user);
-    save_user();
+    ensure_builtin_present();
     s_sel = 0;
     s_off = 0;
-    ESP_LOGI(TAG, "导入完成,共 %u 个电台", (unsigned)s_list.count);
+    s_cur_idx = -1;
+    ESP_LOGI(TAG, "导入完成,共 %d 个电台", station_count());
     return true;
 }
 
@@ -788,42 +698,142 @@ bool radio_pages_app_config_apply(void *root_obj)
 
 void radio_pages_restore_user(void)
 {
-    memset(&s_list, 0, sizeof(s_list));
-    load_user();
+    radio_store_restore_factory();
+    s_sel = 0;
+    s_off = 0;
+    s_cur_idx = -1;
 }
 
-// 回复里带上当前收听状态和剩余堆。堆是这台机器最紧的资源(C3 无 PSRAM,
-// LVGL + WiFi + TLS 门户已占掉大半),播放时能从这里直接看出还剩多少。
-static esp_err_t radio_stations_reply(httpd_req_t *req, bool ok, const char *err)
+// 清单回显改为**手拼 JSON 文本**:整表走 cJSON(树+打印)要 15-25KB 瞬时堆,
+// 门户开着时空闲堆只有 ~20KB,实测 /api/status 与 del/add 的列表回显间歇 oom
+// (连接被直接掐断)。文本直拼只需 ~6KB,堆水位 8KB 以下才截断。
+// URL 经 radio_url_valid 校验(无空白/控制字符);台名再剔一遍引号与反斜杠,
+// 保证不破坏 JSON 结构。
+static size_t radio_json_escape(char *dst, size_t cap, const char *src)
 {
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return ESP_FAIL;
-    cJSON_AddBoolToObject(root, "ok", ok);
-    if (err) cJSON_AddStringToObject(root, "error", err);
-    radio_pages_app_config_fill(root);
+    size_t di = 0;
+    for (size_t i = 0; src[i] && di + 2 < cap; i++) {
+        const char c = src[i];
+        if (c == '\x22' || c == '\\') {   // \x22 = 双引号(字面量别写成 '"',会干扰字形收集的正则)
+            if (di + 2 >= cap) break;
+            dst[di++] = '\\';
+        }
+        dst[di++] = c;
+    }
+    dst[di] = '\0';
+    return di;
+}
 
+// 把整份清单按 HTTP 分块发出去(调用方已发过前缀)。零大块分配——整表
+// cJSON 或 malloc(12KB) 在碎片堆上都拿不到(实测 500/断连),512B 一条总能
+// 发出去。trunc 置 true=堆不足或发送失败,只回显了前段。
+static esp_err_t radio_stations_chunks(httpd_req_t *req, bool *trunc, int *emitted)
+{
+    char line[512];
+    *trunc = false;
+    *emitted = 0;
+    radio_station_t st;
+    const int count = station_count();
+    for (int i = 0; i < count; i++) {
+        if (!radio_store_get(i, &st)) continue;
+        // 堆水位只是门户自己的保护线(发送本身不占堆)。
+        if (i > 0 && heap_caps_get_free_size(MALLOC_CAP_INTERNAL) < 6 * 1024) {
+            *trunc = true;
+            ESP_LOGW(TAG, "清单回显截断:%d/%d 台(堆不足)", i, count);
+            break;
+        }
+        char n[RADIO_NAME_MAX * 2], u[RADIO_URL_MAX * 2];
+        radio_json_escape(n, sizeof(n), st.name);
+        radio_json_escape(u, sizeof(u), st.url);
+        snprintf(line, sizeof(line), "%s{\"n\":\"%s\",\"u\":\"%s\",\"builtin\":%s}",
+                 (*emitted) ? "," : "", n, u,
+                 radio_store_is_builtin(st.name, st.url) ? "true" : "false");
+        // ≤256B 分片发送:堆紧时 lwip 的 TCP 发送缓冲很小,4KB 一口的
+        // send 会在半路 MEM 失败(实测响应恰好断在 4080 字节)。
+        const char *p = line;
+        size_t len = strlen(line);
+        while (len) {
+            const size_t n = len < 256 ? len : 256;
+            const esp_err_t e = httpd_resp_send_chunk(req, p, (int)n);
+            if (e != ESP_OK) { *trunc = true; return e; }
+            p += n;
+            len -= n;
+        }
+        (*emitted)++;
+    }
+    return ESP_OK;
+}
+
+// 回复状态段(station/title/解码信息/剩余堆),写进 head 并返回长度。
+static size_t radio_status_json(char *head, size_t cap)
+{
     radio_player_snap_t s;
     radio_player_snapshot(&s);
-    cJSON *st = cJSON_CreateObject();
-    cJSON_AddStringToObject(st, "station", s.station[0] ? s.station : "");
-    cJSON_AddStringToObject(st, "title", s.title);
-    cJSON_AddNumberToObject(st, "state", (int)s.state);
-    cJSON_AddNumberToObject(st, "err", (int)s.err_code);
-    cJSON_AddNumberToObject(st, "sample_rate", s.sample_rate);
-    cJSON_AddNumberToObject(st, "channels", s.channels);
-    cJSON_AddNumberToObject(st, "bitrate", s.bitrate);
-    cJSON_AddNumberToObject(st, "volume", s.volume);
-    cJSON_AddItemToObject(root, "status", st);
-    cJSON_AddNumberToObject(root, "heap_free",
-                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    size_t used = (size_t)snprintf(head, cap, "\"station\":\"");
+    used += (size_t)radio_json_escape(head + used, cap - used,
+                                      s.station[0] ? s.station : "");
+    used += (size_t)snprintf(head + used, cap - used, "\",\"title\":\"");
+    used += (size_t)radio_json_escape(head + used, cap - used, s.title);
+    used += (size_t)snprintf(head + used, cap - used,
+        "\",\"state\":%d,\"err\":%d,\"sample_rate\":%u,\"channels\":%u,"
+        "\"bitrate\":%u,\"volume\":%u,\"heap_free\":%u}",
+        (int)s.state, (int)s.err_code,
+        (unsigned)s.sample_rate, (unsigned)s.channels,
+        (unsigned)s.bitrate, (unsigned)s.volume,
+        (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    return used;
+}
 
-    char *txt = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!txt) return ESP_FAIL;
+// 统一回复:{"ok":..[,error][,"stations":[..流式..],stations_truncated]
+//          [,"status":{..}]}。全部分块发送,堆再紧也发得出去。
+static esp_err_t radio_stations_reply(httpd_req_t *req, bool ok, const char *err,
+                                      bool want_list)
+{
+    char part[320];
+    size_t used = (size_t)snprintf(part, sizeof(part), "{\"ok\":%s", ok ? "true" : "false");
+    if (err) used += (size_t)snprintf(part + used, sizeof(part) - used,
+                                      ",\"error\":\"%s\"", err);
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, txt);
-    cJSON_free(txt);
-    return ESP_OK;
+    esp_err_t e = httpd_resp_send_chunk(req, part, (int)used);
+
+    bool trunc = false;
+    int emitted = 0;
+    if (e == ESP_OK && want_list) {
+        e = httpd_resp_send_chunk(req, ",\"stations\":[", HTTPD_RESP_USE_STRLEN);
+        if (e == ESP_OK) e = radio_stations_chunks(req, &trunc, &emitted);
+        if (e == ESP_OK) e = httpd_resp_send_chunk(req, "]", HTTPD_RESP_USE_STRLEN);
+        if (e == ESP_OK && trunc) {
+            e = httpd_resp_send_chunk(req, ",\"stations_truncated\":true",
+                                      HTTPD_RESP_USE_STRLEN);
+        }
+    }
+    if (e == ESP_OK) {
+        used = (size_t)snprintf(part, sizeof(part), ",\"status\":{");
+        used += radio_status_json(part + used, sizeof(part) - used);
+        used += (size_t)snprintf(part + used, sizeof(part) - used, "}");
+        e = httpd_resp_send_chunk(req, part, (int)used);
+    }
+    if (e == ESP_OK) e = httpd_resp_send_chunk(req, NULL, 0);
+    return e;
+}
+
+// 门户列表专用:只回清单(初始加载/手动刷新用,比整 status 便宜得多)。
+static esp_err_t radio_list_reply(httpd_req_t *req)
+{
+    char part[64];
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_send_chunk(req, "{\"ok\":true,\"stations\":[",
+                                        HTTPD_RESP_USE_STRLEN);
+    bool trunc = false;
+    int emitted = 0;
+    if (e == ESP_OK) e = radio_stations_chunks(req, &trunc, &emitted);
+    // 即便中途出错也把收尾发完(socket 已死时这些调用无害地失败)。
+    (void)httpd_resp_send_chunk(req, "]", HTTPD_RESP_USE_STRLEN);
+    if (trunc) (void)httpd_resp_send_chunk(req, ",\"stations_truncated\":true",
+                                           HTTPD_RESP_USE_STRLEN);
+    (void)httpd_resp_send_chunk(req, "}", HTTPD_RESP_USE_STRLEN);
+    (void)httpd_resp_send_chunk(req, NULL, 0);
+    return e;
 }
 
 static esp_err_t radio_api_handler(httpd_req_t *req)
@@ -837,32 +847,49 @@ static esp_err_t radio_api_handler(httpd_req_t *req)
 
     if (!cJSON_IsString(op)) {
         ok = false; err = "缺少 op";
+    } else if (strcmp(op->valuestring, "list") == 0) {
+        // 门户列表专用的轻量回显(手拼文本),初始加载/手动刷新用。
+        cJSON_Delete(root);
+        return radio_list_reply(req);
     } else if (strcmp(op->valuestring, "add") == 0) {
         const cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         const cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "url");
+        bool want_list = false;
         if (!cJSON_IsString(n) || !cJSON_IsString(u)) { ok = false; err = "缺少 name 或 url"; }
-        else if (radio_list_add(&s_list, n->valuestring, u->valuestring)) {
-            save_user();
+        else if (radio_store_add(n->valuestring, u->valuestring)) {
+            // 已落盘(逐条 NVS),屏幕下一轮 500ms 轮询自然刷新。
+            want_list = true;                        // 门户要重渲染列表
         } else {
-            ok = false; err = "地址不合法或列表已满(最多 8 个)";
+            ok = false; err = "地址不合法或列表已满(最多 48 个)";
         }
+        cJSON_Delete(root);
+        return radio_stations_reply(req, ok, err, want_list);
     } else if (strcmp(op->valuestring, "del") == 0) {
         const cJSON *i = cJSON_GetObjectItemCaseSensitive(root, "index");
+        radio_station_t st;
+        bool want_list = false;
         if (!cJSON_IsNumber(i)) { ok = false; err = "缺少 index"; }
-        else if (i->valueint < 0 || i->valueint >= (int)s_list.count) { ok = false; err = "下标越界"; }
-        else if (is_builtin_exact(s_list.items[i->valueint].name, s_list.items[i->valueint].url)) {
+        else if (i->valueint < 0 || i->valueint >= station_count()) { ok = false; err = "下标越界"; }
+        else if (!radio_store_get((int)i->valueint, &st)) { ok = false; err = "下标越界"; }
+        else if (radio_store_is_builtin(st.name, st.url)) {
             // 内置台删掉就再也加不回来(要改代码),不如明说。
             ok = false; err = "内置电台不能删除";
-        } else if (radio_list_remove(&s_list, (uint8_t)i->valueint)) {
-            save_user();
+        } else if (radio_store_remove((int)i->valueint)) {
+            if (s_cur_idx == (int)i->valueint) s_cur_idx = -1;
+            want_list = true;                        // 门户要重渲染列表
         } else { ok = false; err = "删除失败"; }
+        cJSON_Delete(root);
+        return radio_stations_reply(req, ok, err, want_list);
     } else if (strcmp(op->valuestring, "play") == 0) {
         // 电台本来就在这个页面上管理,顺手也能开播/停播:调试时不用守在机器前按键。
         const cJSON *i = cJSON_GetObjectItemCaseSensitive(root, "index");
+        radio_station_t st;
         if (!cJSON_IsNumber(i)) { ok = false; err = "缺少 index"; }
-        else if (i->valueint < 0 || i->valueint >= (int)s_list.count) { ok = false; err = "下标越界"; }
+        else if (i->valueint < 0 || i->valueint >= station_count()) { ok = false; err = "下标越界"; }
+        else if (!radio_store_get((int)i->valueint, &st)) { ok = false; err = "下标越界"; }
         else {
-            radio_play(s_list.items[i->valueint].name, s_list.items[i->valueint].url);
+            radio_play(st.name, st.url);
+            s_cur_idx = (int)i->valueint;
         }
     } else if (strcmp(op->valuestring, "stop") == 0) {
         radio_stop();
@@ -873,7 +900,8 @@ static esp_err_t radio_api_handler(httpd_req_t *req)
     }
 
     cJSON_Delete(root);
-    return radio_stations_reply(req, ok, err);
+    // play/stop/state 的回复不带清单(播放期间堆见底,整表 JSON 会挤死 httpd)。
+    return radio_stations_reply(req, ok, err, false);
 }
 
 bool radio_pages_portal_register(void *httpd)

@@ -35,6 +35,15 @@ static const radio_station_t BUILTIN[] = {
 };
 #define BUILTIN_N ((uint8_t)(sizeof(BUILTIN) / sizeof(BUILTIN[0])))
 
+int radio_builtin_count(void) { return (int)BUILTIN_N; }
+
+bool radio_builtin_get(int idx, radio_station_t *out)
+{
+    if (!out || idx < 0 || idx >= (int)BUILTIN_N) return false;
+    *out = BUILTIN[idx];    // BUILTIN 是 const,数据留在 flash rodata
+    return true;
+}
+
 void radio_list_builtin(radio_list_t *out)
 {
     if (!out) return;

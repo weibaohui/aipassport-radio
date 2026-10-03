@@ -27,6 +27,10 @@ typedef struct {
 // 保留内置台是为了设备开箱即用;用户可在门户里追加/删除自己的流。
 void radio_list_builtin(radio_list_t *out);
 
+// 逐条读内置台(数据在 flash rodata,不占 RAM;radio_store 物化清单用)。
+int radio_builtin_count(void);
+bool radio_builtin_get(int idx, radio_station_t *out);
+
 // 清空(只留零条目)。
 void radio_list_reset(radio_list_t *l);
 
@@ -45,8 +49,8 @@ bool radio_url_valid(const char *url);
 // 从流 URL 解析出 TCP 连接用的 "host[:port]",写入 out。
 // 缺省端口取 80。成功返回 true;URL 非法或 host 为空返回 false。
 //
-// 为什么只接受 http://:这台设备无 PSRAM,96KB 堆要同时留给 LVGL、WiFi、
-// TLS 握手缓冲和 MP3 解码器。音频流本身不含机密,为省下 TLS 的常驻内存
-// 刻意走明文 HTTP——这也是 Icecast/Shoutcast 的常规用法。若将来要接
-// 需要凭据的源,应当改为在应用层加解密,而不是给整条流上 TLS。
+// http 与 https 都放行(播放器走 esp_http_client,TLS 按需加载)。但这台机器
+// 无 PSRAM,96KB 堆要同时留给 LVGL、WiFi、TLS 握手缓冲和 MP3 解码器,https
+// 流播放期间的 TLS 上下文(约 40KB 连续内存)经常挤不出来 —— 内置/出厂台
+// 仍刻意全选 http 明文源,把 https 留给用户自加的台。
 bool radio_url_hostport(const char *url, char *out, size_t out_len);

@@ -8,8 +8,8 @@
 //   CH    频道序号 CH 03 / 04
 //   台名  大字
 //   副标题 码率 / 采样率
-//   刻度面板  频率刻度尺 + 黄色峰值指针 + 当前峰值频率
-//   频谱面板  一排随声音起伏的彩条
+//   频谱面板  一排随声音起伏的彩条(2026-10-03 删除了频率刻度面板:假频谱
+//            不做真实频率分析,65/175/473/1.3k 那排数字没有意义)
 //   状态行  播放中 / 出错
 //   提示行  按键说明
 //
@@ -33,9 +33,6 @@
 // 让一步。16 根在 240px 宽下每根约 9px,视觉上仍然是密集柱阵。
 // 若将来要加回 32 根,先在真机日志里确认解码器初始化成功再提交。
 #define RADIO_VIZ_BAR_N RADIO_VIZ_BANDS
-
-// 频率刻度尺的刻度数
-#define RADIO_VIZ_TICKS 6
 
 // 顶栏 + 副标题 + 状态行的文案。指针为 NULL 的项保持上一次不变。
 typedef struct {
@@ -63,13 +60,6 @@ typedef struct {
     lv_obj_t *station;     // 台名(大字)
     lv_obj_t *title;       // 曲名(灰色小字)
 
-    lv_obj_t *scale;       // 频率刻度面板
-    lv_obj_t *tick[RADIO_VIZ_TICKS];   // 刻度数字
-    lv_obj_t *mark;        // 黄色峰值指针
-    lv_obj_t *peak;        // 面板内:当前峰值频率
-    bool show_peak;        // 显示峰值指针(默认 true)。"假频谱"不是真实频率
-                           // 分析,不配在收音机频率刻度上滑动,应置 false
-
     lv_obj_t *panel;       // 频谱底板
     lv_obj_t *bar[RADIO_VIZ_BAR_N];
 
@@ -82,8 +72,6 @@ typedef struct {
     // 布局常量,创建时算一次。这里**不能**用 lv_obj_get_width() 读回条子
     // 宽度:LVGL 9 里对象在布局计算前读回几何是 0,会把宽度清成 0,条子
     // 直接消失(踩过一次)。
-    int32_t scale_w;       // 刻度尺可用宽度
-    int32_t scale_x;       // 刻度尺左边
     int32_t baseline;      // 条子底边(柱子从这里往上长)
     int32_t max_h;         // 最高的柱子有多高
     int32_t slot;          // 每根柱子的横向步进

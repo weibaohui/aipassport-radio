@@ -19,15 +19,15 @@
 #define PANEL_X      10
 #define PANEL_W      220
 
-#define SCALE_Y      118
-#define SCALE_H      78      // 频率刻度面板
-#define SCALE_PAD    6
-
-#define VIZ_Y        202     // 频谱面板
-#define VIZ_H        62
+// 频率刻度面板已删(2026-10-03):假频谱不做真实频率分析,65/175/473/1.3k
+// 的刻度没有意义。
+// 高度压到 44px(2026-10-03 真机反馈):132px 的大柱阵每帧变化太扎眼,
+// "刷新感很重";矮条的视觉扰动小,律动感还在。
+#define VIZ_Y        206     // 频谱面板(贴近底部状态行,中段留给台名呼吸)
+#define VIZ_H        44
 #define VIZ_PAD      6
 #define VIZ_BOT      8
-#define VIZ_TOP      8
+#define VIZ_TOP      6
 
 #define STATUS_Y     262
 #define HINT_Y       280
@@ -38,11 +38,9 @@
 // ---- 配色 ------------------------------------------------------------------
 #define C_BG         0x080D14      // 整屏底色
 #define C_TOPLINE    0x1B2534      // 顶栏分隔线
-#define C_YELLOW     0xFFC531      // 应用名 / CH / 峰值:黄
+#define C_YELLOW     0xFFC531      // 应用名 / CH:黄
 #define C_TITLE      0xF2F6FA      // 台名:近白
 #define C_DIM        0x7A8899      // 副标题 / 电量
-#define C_TEXT       0xDCE6F2      // 刻度数字
-#define C_SCALE_BG   0x16233C      // 刻度面板底
 #define C_VIZ_BG     0x16202E      // 频谱面板底
 #define C_OK         0x35C26B      // 播放中
 #define C_BAD        0xE5484D      // 出错
@@ -68,14 +66,6 @@ static lv_color_t bar_color(uint8_t lv255)
     const uint8_t s = (uint8_t)(65 + t * 23 / 255);      // 饱和度 65% → 88%
     const uint8_t v = (uint8_t)(55 + t * 45 / 255);      // 明度   55% → 100%
     return lv_color_hsv_to_rgb(h, s, v);
-}
-
-// 频段的中心频率排成一条刻度尺,标注用 "55" / "160" / "1.3k" 这样的短写法。
-static void hz_label(char *buf, size_t n, float hz)
-{
-    if (hz < 1000.0f) snprintf(buf, n, "%d", (int)(hz + 0.5f));
-    else if (hz < 10000.0f) snprintf(buf, n, "%.1fk", hz / 1000.0f);
-    else snprintf(buf, n, "%dk", (int)(hz / 1000.0f + 0.5f));
 }
 
 static lv_obj_t *plain_obj(lv_obj_t *parent, int32_t w, int32_t h,
@@ -154,60 +144,7 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->title = flat_label(v->root, font16, C_DIM, v->w - MARGIN_X * 2,
                              MARGIN_X, SUBTITLE_Y, "");
 
-    // ---- 频率刻度面板 ----
-    v->scale = plain_obj(v->root, PANEL_W, SCALE_H, PANEL_X, SCALE_Y, C_SCALE_BG, 8);
-    lv_obj_set_scrollbar_mode(v->scale, LV_SCROLLBAR_MODE_OFF);
-
-    v->scale_w = PANEL_W - SCALE_PAD * 2;
-    v->scale_x = PANEL_X + SCALE_PAD;
-
-    // 刻度数字横着铺开。用 flex 让 LVGL 自己算位置 —— 绝对定位需要知道
-    // 标签宽度,而 LVGL 9 在布局算完之前读回宽度是 0,会全部叠在左边。
-    {
-        lv_obj_t *row = lv_obj_create(v->scale);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, v->scale_w, 18);
-        lv_obj_set_pos(row, v->scale_x - PANEL_X, 6);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY,
-                              LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-        for (int i = 0; i < RADIO_VIZ_TICKS; i++) {
-            char buf[12];
-            // 刻度 i 落在对数轴的 i/(TICKS-1) 处,和频段划分同一把尺子。
-            const float hz = radio_viz_band_hz(
-                (int)((float)i * (RADIO_VIZ_BANDS - 1) / (RADIO_VIZ_TICKS - 1) + 0.5f));
-            hz_label(buf, sizeof(buf), hz);
-            lv_obj_t *t = lv_label_create(row);
-            lv_obj_set_style_text_font(t, font16, 0);
-            lv_obj_set_style_text_color(t, lv_color_hex(C_TEXT), 0);
-            lv_label_set_text(t, buf);
-        }
-    }
-
-    // 刻度短线(和数字同一套 flex,视觉上对齐)
-    {
-        lv_obj_t *row = lv_obj_create(v->scale);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, v->scale_w, 7);
-        lv_obj_set_pos(row, v->scale_x - PANEL_X, 26);
-        lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_EVENLY,
-                              LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-        for (int i = 0; i < RADIO_VIZ_TICKS; i++) {
-            (void)plain_obj(row, 1, 7, 0, 0, 0x3E5A78, 0);
-        }
-    }
-
-    // 黄色峰值指针:跟着当前最响的频段左右移动
-    v->mark = plain_obj(v->scale, 3, 16, 0, 22, C_YELLOW, 1);
-    v->peak = flat_label(v->scale, font16, C_YELLOW, v->scale_w, SCALE_PAD,
-                         50, "峰值 —");
-
-    // ---- 频谱面板 ----
+    // ---- 频谱面板(已无频率刻度:假频谱不做真实频率分析) ----
     v->panel = plain_obj(v->root, PANEL_W, VIZ_H, PANEL_X, VIZ_Y, C_VIZ_BG, 8);
     lv_obj_set_scrollbar_mode(v->panel, LV_SCROLLBAR_MODE_OFF);
 
@@ -230,7 +167,7 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->status = flat_label(v->root, font16, C_OK, v->w - MARGIN_X * 2,
                            MARGIN_X, STATUS_Y, "");
     v->hint   = wrap_label(v->root, font16, C_HINT, v->w - MARGIN_X * 2, 38,
-                           MARGIN_X, HINT_Y, "上下切台，长按OK选台，短按OK暂停");
+                           MARGIN_X, HINT_Y, "上下切台，短按OK暂停，长按OK回选台");
 
     lv_obj_set_user_data(v->root, v);
     return v->root;
@@ -241,8 +178,6 @@ void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t le
 {
     if (!v || !v->root) return;
 
-    int peak_i = 0;
-    uint8_t peak_v = 0;
     for (int j = 0; j < RADIO_VIZ_BAR_N; j++) {
         // 一根柱子对应一个真实频段(BAR_N == RADIO_VIZ_BANDS 时 u 恒等于 j)。
         // 保留这层线性插值:以后若把 BAR_N 调回 2x,偶数下标落在真实频段上、
@@ -255,7 +190,6 @@ void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t le
             const int frac = u - i0;
             lv = (uint8_t)(bands[i0] + ((int)bands[i1] - (int)bands[i0]) * frac / 255);
         }
-        if (lv > peak_v) { peak_v = lv; peak_i = j; }
 
         int32_t hgt = (int32_t)((int)lv * v->max_h / 255);
         if (hgt < MIN_BAR_H) hgt = MIN_BAR_H;
@@ -272,26 +206,6 @@ void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t le
     lv_obj_set_style_bg_color(v->panel,
         lv_color_make((uint8_t)(22 + level / 20), (uint8_t)(32 + level / 16),
                       (uint8_t)(46 + level / 10)), 0);
-
-    // 峰值指针:停在最响的那根柱子上;没声音就藏起来。
-    // show_peak=false 时整个指针+读数永久隐藏(假频谱不占用频率刻度)。
-    if (!v->show_peak) {
-        lv_obj_set_hidden(v->mark, true);
-        lv_label_set_text(v->peak, "");
-    } else if (peak_v > 24) {
-        const int32_t cx = v->scale_x + (peak_i + 0.5) * v->scale_w / RADIO_VIZ_BAR_N;
-        lv_obj_set_pos(v->mark, cx - v->scale_x - 1, 22);
-        char hz[12], buf[24];
-        hz_label(hz, sizeof(hz), radio_viz_band_hz(peak_i * RADIO_VIZ_BANDS / RADIO_VIZ_BAR_N));
-        snprintf(buf, sizeof(buf), "峰值 %s Hz", hz);
-        lv_label_set_text(v->peak, buf);
-        lv_obj_set_style_text_color(v->peak, lv_color_hex(C_YELLOW), 0);
-        lv_obj_set_hidden(v->mark, false);
-    } else {
-        lv_label_set_text(v->peak, "峰值 —");
-        lv_obj_set_style_text_color(v->peak, lv_color_hex(0x4A5563), 0);
-        lv_obj_set_hidden(v->mark, true);
-    }
 
     if (chrome) {
         if (chrome->app_name) lv_label_set_text(v->app_name, chrome->app_name);

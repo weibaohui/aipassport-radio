@@ -61,6 +61,9 @@ uint8_t radio_player_level(void);
 // 暂停/继续(播放页 OK)。暂停 = 保持连接但丢弃音频,恢复即接最新流。
 void radio_player_toggle_pause(void);
 
+// 开机尽早调用:预留大块连续内存给播放管线(防堆碎片)。
+void radio_player_reserve(void);
+
 void radio_player_snapshot(radio_player_snap_t *out);
 
 // 取频谱快照:bands 个频段的电平(0..255)+ 总电平。由音频线程更新,
