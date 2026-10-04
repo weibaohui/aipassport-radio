@@ -1,50 +1,46 @@
-// main/radio_store.h —— 电台清单的 flash 存储(逐条 NVS,按需加载)。
+// main/radio_store.h —— 电台清单存储:固件台目(只读 rodata) + 自定义台(逐条 NVS)。
 //
-// 动机:C3 无 PSRAM,SRAM 每 KB 都要留给 LVGL/WiFi/TLS/解码器。旧实现把整份
-// 清单(48 台 × 128B ≈ 6KB)常驻 RAM,门户/启动路径还各有整表临时副本,合计
-// ~31KB 静态内存。改为逐条落 NVS 后,RAM 里只留一个条数;列表页画哪 5 行就读
-// 哪 5 条,开播时只取当前 1 条,不播列表时清单完全不在内存里。
+// 动机:C3 无 PSRAM,SRAM 每 KB 都要留给 LVGL/WiFi/TLS/解码器。清单常驻 RAM
+// 的旧实现合计 ~31KB 静态内存;改为"台目走 flash 内存映射 + 自定义台逐条落
+// NVS"后,RAM 里只留一个自定义条数;列表页画哪 5 行就读哪 5 条,开播时只取
+// 当前 1 条。
 //
-// 存储布局:键 r_cnt = 条数;键 r0..r47 = "台名\tURL"。前 6 条按固定顺序物化
-// 内置台(开箱即用、门户可改址但不可删)。
+// 台目 = 内置 6 精品 + 固件内嵌 RADIO_CATALOG(339 台,tools/gen_catalog.py
+// 生成),纯 rodata 不占 RAM,永不可删改。自定义台 = 键 u_cnt + u0..u99 =
+// "台名\tURL",上限 RADIO_MAX_STATIONS;NVS 分区 24KB 是真实天花板——地址
+// 都很长时可能先写满,add 会干净地返回 false。
 //
-// 一致性模型:单用户设备,写只来自门户(httpd 任务)与启动迁移,读来自
-// LVGL/输入任务。不加锁——与旧实现一致;最坏情形是删除与浏览并发时某一屏
-// 读到移动中的一条,下一轮 500ms 轮询自愈。NVS 单键读写本身线程安全。
+// 一致性模型:单用户设备,写只来自门户(httpd 任务)/MCP 任务与启动迁移,
+// 读来自 LVGL/输入任务。不加锁——NVS 单键读写本身线程安全。
 #pragma once
 
 #include "radio_streams.h"
 
+// 台目基数(内置精品 + 固件台目),恒可播、下标 0..count-1 的只读段。
+int radio_store_catalog_count(void);
+
 // 启动调用一次(须在 appfw_store_init 之后、建 UI 之前):
-//   - NVS 里已有清单(有 r_cnt)→ 只回读条数;
-//   - 空机 → 物化出厂清单(内置 6 + 固件内嵌出厂 42);
-//   - 发现旧版整份 M3U 键(radio_m3u)→ 迁移为逐条,迁移完释放旧键。
+//   - 读自定义台数(键 u_cnt);
+//   - 发现旧版清单键(r_cnt/r0..r47,内容全是台目副本)→ 一次性清空腾 NVS。
 void radio_store_init(void);
 
-// 当前条数(0..RADIO_MAX_STATIONS)。RAM 里唯一常驻的清单状态。
+// 当前条数 = 台目基数 + 自定义台数。RAM 里唯一常驻的清单状态是自定义条数。
 int radio_store_count(void);
 
 // 读第 idx 条。out 为 128B 的 radio_station_t,调用方栈上放即可。
 bool radio_store_get(int idx, radio_station_t *out);
 
-// 按台名找下标(逐条读 flash 线性扫,最坏 48 次小读);未找到 -1。
+// 按台名找下标:自定义台优先(同名改址的用户版本优先于台目),未找到 -1。
 int radio_store_find(const char *name);
 
-// 大清单模式(/files/radio.m3u 就绪)为只读:count/get/find 委托文件清单,
-// 增删改一律拒绝——在电脑上编辑 m3u 后经门户「文件管理」重新上传。
-bool radio_store_readonly(void);
-
-// 追加;同名视为改地址(含改内置台地址)。非法/已满返回 false。
+// 追加自定义台;同名(自定义列表内)视为改地址。非法/已满返回 false。
 bool radio_store_add(const char *name, const char *url);
 
-// 删除下标,其后条目整体前移。与内置台完全一致的条目拒删。
+// 删除下标,其后自定义条目整体前移。台目段(idx < catalog_count)拒删。
 bool radio_store_remove(int idx);
 
-// 整表替换(门户导入)的起点:清空全部条目,随后用 radio_store_add 逐条装回。
+// 清空全部自定义台(门户整表导入 / MCP 导入 / 回出厂的起点)。台目不受影响。
 void radio_store_import_begin(void);
 
-// 恢复出厂清单(内置 6 + 出厂 42),返回条数。
+// 回出厂状态:清空自定义台,返回条数(= 台目基数)。
 int radio_store_restore_factory(void);
-
-// 与内置台名称、地址都完全一致(门户"内置台"标记与拒删判定用)。
-bool radio_store_is_builtin(const char *name, const char *url);

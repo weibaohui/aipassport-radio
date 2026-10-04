@@ -1,5 +1,7 @@
 # 主机测试源文件映射:<stem> <源文件...>(相对仓库根)
-# M3U 解析与大清单机制均已上移框架(appfw_m3u / appfw_biglist),直接引用
-# 框架源编译;test_radio_store 测 NVS 小清单路径,不注册台目兜底。
-radio_store main/radio_store.c main/radio_streams.c components/framework/appfw/src/appfw_m3u.c components/framework/appfw/src/appfw_biglist.c
-appfw_biglist components/framework/appfw/src/appfw_biglist.c
+# 大清单文件模式已删(2026-10-04 拆 FAT):radio_store = 台目 rodata +
+# 自定义台逐条 NVS,不再依赖框架的 m3u/biglist。
+# appfw_mcp 的协议核在框架:MCP 传输是常驻极简 TCP(不进主机测试),
+# 分发语义(握手/列举/调用/通知/错误码)在这里钉死。
+radio_store main/radio_store.c main/radio_streams.c
+appfw_mcp components/framework/appfw/src/appfw_mcp.c components/framework/tests/thirdparty/cJSON/cJSON.c

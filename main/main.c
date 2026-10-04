@@ -6,7 +6,6 @@
 #include <stdbool.h>
 
 #include "appfw_client.h"
-#include "appfw_files.h"
 #include "appfw_net.h"
 #include "appfw_netlist.h"
 #include "appfw_portal.h"
@@ -93,9 +92,6 @@ void app_main(void)
         return;
     }
     bsp_display_backlight(100);
-    if (appfw_files_init() != ESP_OK) {
-        ESP_LOGE(TAG, "文件分区挂载失败(文件管理不可用)");
-    }
     if (appfw_store_init() != ESP_OK) {
         ESP_LOGE(TAG, "NVS 初始化失败(电台配置将无法保存)");
     }
@@ -180,10 +176,9 @@ void app_main(void)
         .on_httpd_ready   = portal_ready,
     };
     appfw_prov_configure(&pcfg);
-    // 门户按需(见 appfw_ui_second_tick 与设置菜单「WEB管理」):没联网时
-    // 1 秒内自动拉起等人配网;联网后想用网页管理,进「设置→WEB管理」——
-    // 留在该页 httpd 就开着,离页立即卸载;300s 无请求也会自动下线。
-    // httpd 启动前 appfw_portal_pre_start_hook 会释放 60KB 解码器预留。
+    // 配网门户按需(见 appfw_ui_second_tick):只在没网要配网时自启,联网后
+    // 空闲 5 分钟自动卸载。AI 入口不在这条路上——MCP 常驻独立极简服务
+    // (8080/mcp,设置菜单「AI管理」页查看地址)。
 
     esp_timer_handle_t tick;
     const esp_timer_create_args_t ta = { .callback = second_tick_cb, .name = "tick" };

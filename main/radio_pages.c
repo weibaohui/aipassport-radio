@@ -22,8 +22,6 @@
 #include "lvgl.h"
 
 #include "radio_player.h"
-#include "appfw_biglist.h"
-#include "radio_catalog.h"
 #include "radio_store.h"
 #include "radio_streams.h"
 #include "radio_viz_view.h"
@@ -553,48 +551,10 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
 
 // ---------------------------------------------------------------- 持久化
 
-// 清单持久化整体移交 radio_store(逐条 NVS):本文件不再持有任何整表副本。
-// 门户导入的"内置台兜底"沿用旧语义——列表里没有的内置台补回来,同名自改
-// 地址的不动。
-static void ensure_builtin_present(void)
-{
-    radio_station_t b;
-    for (int i = 0; i < radio_builtin_count(); i++) {
-        if (!radio_builtin_get(i, &b)) continue;
-        if (radio_store_find(b.name) < 0 && !radio_store_add(b.name, b.url)) {
-            ESP_LOGW(TAG, "内置台补回失败(列表已满?): %s", b.name);
-        }
-    }
-}
-
-// --- appfw_biglist 的应用注入(内存借洞/台目兜底/播放器占用) ---
-static bool mem_make_room(void)
-{
-    radio_player_release_reserve();
-    return true;
-}
-static void mem_room_returned(void) { radio_player_reacquire_reserve(); }
-static bool player_busy(void)
-{
-    radio_player_snap_t s;
-    radio_player_snapshot(&s);
-    return s.state != RADIO_STOPPED;
-}
-static int catalog_count(void) { return RADIO_CATALOG_N; }
-static bool catalog_get(int idx, appfw_biglist_entry_t *e)
-{
-    if (idx < 0 || idx >= RADIO_CATALOG_N) return false;
-    // radio_station_t 与 appfw_biglist_entry_t 布局一致(32/256),按字段拷
-    memcpy(e->name, RADIO_CATALOG[idx].name, sizeof(e->name));
-    memcpy(e->url, RADIO_CATALOG[idx].url, sizeof(e->url));
-    return true;
-}
-
+// 清单持久化整体在 radio_store:台目 rodata + 自定义台逐条 NVS,
+// 本文件不再持有任何清单状态,也不再有内存借洞/挂载这类文件系统事务。
 void radio_pages_init(void)
 {
-    appfw_biglist_set_memory_hooks(mem_make_room, mem_room_returned);
-    appfw_biglist_set_catalog(catalog_count, catalog_get);
-    appfw_biglist_set_busy_query(player_busy);
     s_sel = 0;
     s_off = 0;
     s_cur_idx = -1;
@@ -629,8 +589,8 @@ int radio_pages_info_rows(char (*keys)[16], char (*vals)[72], int max)
 // ---------------------------------------------------------------- 门户配置
 
 // 大清单模式的配置页:只读 + 分页浏览(10 条/页,"下一页"按钮点击再取 10 条,
-// 永远不在网页/内存里摊开整表)。增删改的入口是「文件管理」页:电脑上编辑
-// m3u 后重新上传;设备上恢复出厂会删大清单退回出厂 48 台。
+// 永远不在网页/内存里摊开整表)。增删改的入口是局域网 AI:MCP 的
+// playlist_import_begin/add/finish 逐条导入(2026-10-03 起,不再有网页上传)。
 
 
 void radio_pages_app_config_fill(void *obj)
@@ -647,13 +607,9 @@ bool radio_pages_app_config_apply(void *root_obj)
 {
     cJSON *arr = cJSON_GetObjectItemCaseSensitive((cJSON *)root_obj, "stations");
     if (!cJSON_IsArray(arr)) return true;   // 没有该字段 = 不改电台
-    if (radio_store_readonly()) {           // 大清单只读:整表导入整体跳过
-        ESP_LOGI(TAG, "大清单模式:跳过门户清单导入");
-        return true;
-    }
 
-    // 整表替换:先清空再按导入顺序逐条装回(下标即门户看到的序号)。
-    // 逐条直写 flash,不再经由任何整表副本。
+    // 整表替换:清空自定义台,再按导入顺序逐条装回(下标即门户看到的序号)。
+    // 台目段不受导入影响,始终在前。
     radio_store_import_begin();
     const cJSON *o = NULL;
     cJSON_ArrayForEach(o, arr) {
@@ -664,7 +620,6 @@ bool radio_pages_app_config_apply(void *root_obj)
             ESP_LOGW(TAG, "导入时丢弃非法电台: %s", n->valuestring);
         }
     }
-    ensure_builtin_present();
     s_sel = 0;
     s_off = 0;
     s_cur_idx = -1;
@@ -732,7 +687,7 @@ static esp_err_t radio_stations_chunks(httpd_req_t *req, bool *trunc, int *emitt
         radio_json_escape(u, sizeof(u), st.url);
         snprintf(line, sizeof(line), "%s{\"n\":\"%s\",\"u\":\"%s\",\"builtin\":%s}",
                  (*emitted) ? "," : "", n, u,
-                 radio_store_is_builtin(st.name, st.url) ? "true" : "false");
+                 i < radio_store_catalog_count() ? "true" : "false");
         // ≤256B 分片发送:堆紧时 lwip 的 TCP 发送缓冲很小,4KB 一口的
         // send 会在半路 MEM 失败(实测响应恰好断在 4080 字节)。
         const char *p = line;
@@ -856,14 +811,12 @@ static esp_err_t radio_api_handler(httpd_req_t *req)
         const cJSON *n = cJSON_GetObjectItemCaseSensitive(root, "name");
         const cJSON *u = cJSON_GetObjectItemCaseSensitive(root, "url");
         bool want_list = false;
-        if (radio_store_readonly()) {
-            ok = false; err = "大清单模式只读:在电脑编辑 radio.m3u 后,经「文件管理」页重新上传";
-        } else if (!cJSON_IsString(n) || !cJSON_IsString(u)) { ok = false; err = "缺少 name 或 url"; }
+        if (!cJSON_IsString(n) || !cJSON_IsString(u)) { ok = false; err = "缺少 name 或 url"; }
         else if (radio_store_add(n->valuestring, u->valuestring)) {
             // 已落盘(逐条 NVS),屏幕下一轮 500ms 轮询自然刷新。
             want_list = true;                        // 门户要重渲染列表
         } else {
-            ok = false; err = "地址不合法或列表已满(最多 48 个)";
+            ok = false; err = "地址不合法或自定义清单已满(上限 100)";
         }
         cJSON_Delete(root);
         return radio_stations_reply(req, ok, err, want_list);
@@ -871,14 +824,12 @@ static esp_err_t radio_api_handler(httpd_req_t *req)
         const cJSON *i = cJSON_GetObjectItemCaseSensitive(root, "index");
         radio_station_t st;
         bool want_list = false;
-        if (radio_store_readonly()) {
-            ok = false; err = "大清单模式只读:在电脑编辑 radio.m3u 后,经「文件管理」页重新上传";
-        } else if (!cJSON_IsNumber(i)) { ok = false; err = "缺少 index"; }
+        if (!cJSON_IsNumber(i)) { ok = false; err = "缺少 index"; }
         else if (i->valueint < 0 || i->valueint >= station_count()) { ok = false; err = "下标越界"; }
         else if (!radio_store_get((int)i->valueint, &st)) { ok = false; err = "下标越界"; }
-        else if (radio_store_is_builtin(st.name, st.url)) {
-            // 内置台删掉就再也加不回来(要改代码),不如明说。
-            ok = false; err = "内置电台不能删除";
+        else if ((int)i->valueint < radio_store_catalog_count()) {
+            // 台目是固件 rodata,删掉就再也回不来(要改代码),不如明说。
+            ok = false; err = "内置台目不能删除";
         } else if (radio_store_remove((int)i->valueint)) {
             if (s_cur_idx == (int)i->valueint) s_cur_idx = -1;
             want_list = true;                        // 门户要重渲染列表

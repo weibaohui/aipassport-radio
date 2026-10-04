@@ -21,3 +21,28 @@ bool appfw_store_set_u16(const char *key, uint16_t value);
 void fake_store_reset(void);
 // 测试专用:直接检查某键是否还存着非空值(迁移后旧键应已清)。
 bool fake_store_has(const char *key);
+
+// ---- appfw_mcp 主机测试所需(内存版桩,固定值) ----
+// 真实类型在 appfw_netlist.h / appfw_storage.h;主机测试只走"没有已存热点"
+// 和固定档位回显,不测 NVS 本身(那是 test_radio_store 的事)。
+typedef struct {
+    char ssid[33];
+    char pwd[65];
+} appfw_netlist_entry_t;
+
+typedef struct {
+    appfw_netlist_entry_t items[8];
+    uint8_t count;
+    int8_t selected;
+} appfw_netlist_t;
+
+static inline bool appfw_store_netlist_load(appfw_netlist_t *list)
+{
+    list->count = 0;
+    list->selected = -1;
+    return false;
+}
+static inline bool appfw_store_get_screen_off(uint16_t *out) { *out = 300; return true; }
+static inline bool appfw_store_set_screen_off(uint16_t v) { (void)v; return true; }
+static inline bool appfw_store_get_period(uint16_t *out) { *out = 300; return true; }
+static inline bool appfw_store_set_period(uint16_t v) { (void)v; return true; }

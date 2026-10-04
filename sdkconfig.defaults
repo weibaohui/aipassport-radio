@@ -58,9 +58,5 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 # 若要编译参考 demo_ble.c,请恢复以下 NimBLE 配置(见基线 git 历史)。
 # CONFIG_BT_ENABLED is not set
 
-# --- 文件管理(files 分区 FATFS)---
-CONFIG_FATFS_LFN_HEAP=y
-CONFIG_FATFS_MAX_LFN=64
-# FATFS 加线程锁:门户 httpd 任务(上传/下载)与 LVGL 任务(大清单轮询)
-# 会并发读写同一个 FAT 挂载,无锁有损坏风险。
-CONFIG_FATFS_USE_LOCK=y
+# FAT 文件分区已拆(2026-10-04):清单=台目 rodata + 自定义台 NVS,
+# files 分区保留在分区表里但不再使用(避免改布局,分段刷机兼容旧机)。

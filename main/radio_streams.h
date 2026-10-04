@@ -8,7 +8,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define RADIO_MAX_STATIONS  48    // 小清单容量(内置 6 + 用户 42;M3U 导入按此封顶)
+#define RADIO_MAX_STATIONS  100   // 自定义台上限;NVS 24KB 是真实天花板,
+                                  // 地址普遍很长时会先写满(add 返回 false 干净报错)
 #define RADIO_NAME_MAX      32    // 台名显示上限
 // 256:合并清单(3473 台)URL 长度 p99=151、最长 252 —— 96 会截断约 120 条。
 #define RADIO_URL_MAX       256   // 流 URL 长度上限
