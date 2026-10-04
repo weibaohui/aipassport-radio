@@ -22,6 +22,8 @@
 #include "lvgl.h"
 
 #include "radio_player.h"
+#include "appfw_biglist.h"
+#include "radio_catalog.h"
 #include "radio_store.h"
 #include "radio_streams.h"
 #include "radio_viz_view.h"
@@ -568,8 +570,34 @@ static void ensure_builtin_present(void)
     }
 }
 
+// --- appfw_biglist 的应用注入(内存借洞/台目兜底/播放器占用) ---
+static bool mem_make_room(void)
+{
+    radio_player_release_reserve();
+    return true;
+}
+static void mem_room_returned(void) { radio_player_reacquire_reserve(); }
+static bool player_busy(void)
+{
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    return s.state != RADIO_STOPPED;
+}
+static int catalog_count(void) { return RADIO_CATALOG_N; }
+static bool catalog_get(int idx, appfw_biglist_entry_t *e)
+{
+    if (idx < 0 || idx >= RADIO_CATALOG_N) return false;
+    // radio_station_t 与 appfw_biglist_entry_t 布局一致(32/256),按字段拷
+    memcpy(e->name, RADIO_CATALOG[idx].name, sizeof(e->name));
+    memcpy(e->url, RADIO_CATALOG[idx].url, sizeof(e->url));
+    return true;
+}
+
 void radio_pages_init(void)
 {
+    appfw_biglist_set_memory_hooks(mem_make_room, mem_room_returned);
+    appfw_biglist_set_catalog(catalog_count, catalog_get);
+    appfw_biglist_set_busy_query(player_busy);
     s_sel = 0;
     s_off = 0;
     s_cur_idx = -1;
@@ -606,7 +634,7 @@ int radio_pages_info_rows(char (*keys)[16], char (*vals)[72], int max)
 // 大清单模式的配置页:只读 + 分页浏览(10 条/页,"下一页"按钮点击再取 10 条,
 // 永远不在网页/内存里摊开整表)。增删改的入口是「文件管理」页:电脑上编辑
 // m3u 后重新上传;设备上恢复出厂会删大清单退回出厂 48 台。
-static const char *radio_biglist_config_html(void)
+static const char *readonly_config_html(void)
 {
     return ""
     "<div class=\"card\"><h2>0 · 应用配置(网络收音机 · 大清单)</h2>\n"
@@ -664,7 +692,7 @@ static const char *radio_biglist_config_html(void)
 
 const char *radio_pages_app_config_html(void)
 {
-    if (radio_store_readonly()) return radio_biglist_config_html();
+    if (radio_store_readonly()) return readonly_config_html();
     return ""
     "<div class=\"card\"><h2>0 · 应用配置(网络收音机)</h2>\n"
     "<div style=\"margin:2px 0 8px;color:#9fb0bf;font-size:13px\">"

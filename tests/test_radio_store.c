@@ -4,7 +4,6 @@
 // 桩)钉死这些行为:出厂物化、旧版 M3U 迁移、同名改址、拒删内置台、删除后
 // 前移、整表导入、恢复出厂、以及"重启"(重复 init)不重置用户清单。
 #include "radio_store.h"
-#include "radio_biglist.h"
 #include "appfw_storage.h"
 #include "appfw_m3u.h"
 #include "radio_m3u_default.h"
@@ -15,10 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// radio_store 委托的 radio_biglist 在主机桩上恒"未挂载借洞",播放器预留
-// 接口给空实现(主机测试不连 radio_player.c)。
-void radio_player_release_reserve(void) {}
-void radio_player_reacquire_reserve(void) {}
 void radio_player_snapshot(radio_player_snap_t *s)
 {
     s->station[0] = '\0';
@@ -30,6 +25,13 @@ void radio_player_snapshot(radio_player_snap_t *s)
     s->bitrate = 0;
     s->volume = 50;
 }
+
+
+
+// radio_store 经 appfw_biglist 内存钩子引用播放器预留接口;主机测试不连
+// radio_player.c,给空实现。
+void radio_player_release_reserve(void) {}
+void radio_player_reacquire_reserve(void) {}
 
 // ---------------------------------------------------------------- 内存 NVS
 
@@ -120,9 +122,6 @@ static void collect_factory(void *user, const char *name, const char *url)
 
 int main(void)
 {
-    // 关掉内置台目兜底:本文件测的是 NVS 小清单路径(台目开着时 store
-    // 永远委托台目,这些路径摸不到)。
-    radio_biglist_set_catalog_enabled(false);
 
     // 解析出厂清单作为期望值(与 store 同款筛选),再按 store 同款合并语义
     // (同名覆盖、首现位置)折叠——出厂清单里有重名台,合并后台数 < 解析条数。

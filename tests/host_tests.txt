@@ -1,5 +1,5 @@
 # 主机测试源文件映射:<stem> <源文件...>(相对仓库根)
-# test_radio_store.c 需要 radio_store + 它依赖的 URL 校验;M3U 解析已上移
-# 框架(appfw_m3u,直接引用框架源),biglist 是大清单(files 分区 m3u+索引)。
-radio_store main/radio_store.c main/radio_biglist.c main/radio_streams.c components/framework/appfw/src/appfw_m3u.c
-radio_biglist main/radio_biglist.c
+# M3U 解析与大清单机制均已上移框架(appfw_m3u / appfw_biglist),直接引用
+# 框架源编译;test_radio_store 测 NVS 小清单路径,不注册台目兜底。
+radio_store main/radio_store.c main/radio_streams.c components/framework/appfw/src/appfw_m3u.c components/framework/appfw/src/appfw_biglist.c
+appfw_biglist components/framework/appfw/src/appfw_biglist.c

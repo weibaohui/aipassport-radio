@@ -79,7 +79,7 @@ void app_main(void)
 {
     ESP_LOGI(TAG, "网络收音机(appfw)启动");
     radio_player_reserve();   // 最早预留 60KB 连续块(WiFi/LVGL 会碎片化堆)。
-                              // 大清单的 FAT 用"借洞"方式与此共存,见 radio_biglist。
+                              // 大清单的 FAT 用"借洞"方式与此共存(钩子在 radio_store.c 注入)。
     bsp_i2c_init();
     (void)bsp_battery_init();
 
@@ -168,7 +168,6 @@ void app_main(void)
         .on_httpd_ready   = portal_ready,
     };
     appfw_prov_configure(&pcfg);
-    (void)appfw_portal_start();   // [测试版临时]
     // 门户按需(见 appfw_ui_second_tick 与设置菜单「WEB管理」):没联网时
     // 1 秒内自动拉起等人配网;联网后想用网页管理,进「设置→WEB管理」——
     // 留在该页 httpd 就开着,离页立即卸载;300s 无请求也会自动下线。

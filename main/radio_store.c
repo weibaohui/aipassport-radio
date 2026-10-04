@@ -8,7 +8,7 @@
 #include "appfw_storage.h"
 #include "esp_log.h"
 
-#include "radio_biglist.h"
+#include "appfw_biglist.h"
 #include "appfw_m3u.h"
 #include "radio_m3u_default.h"
 
@@ -114,9 +114,9 @@ void radio_store_init(void)
 {
     // 大清单优先:files 分区里有 radio.m3u 就完全忽略 NVS 旧键(休眠不删,
     // 恢复出厂删文件后可退回)。RAM 里依旧只有一个条数。
-    radio_biglist_init();   // 复位节流标记(静态初值 0 会被误当"刚探过没有")
-    if (radio_biglist_poll()) {
-        ESP_LOGI(TAG, "大清单模式:%d 台(NVS 清单休眠)", radio_biglist_count());
+    appfw_biglist_init();   // 复位节流标记(静态初值 0 会被误当"刚探过没有")
+    if (appfw_biglist_poll()) {
+        ESP_LOGI(TAG, "大清单模式:%d 台(NVS 清单休眠)", appfw_biglist_count());
         return;
     }
 
@@ -154,10 +154,10 @@ int radio_store_count(void)
 {
     // 大清单模式:内置精品台永远排最前,导入清单跟在后面(不整体覆盖)。
     const int base = radio_builtin_count();
-    if (radio_biglist_poll()) return base + radio_biglist_count();
-    // 大清单模式粘住(见 radio_biglist_available):临时读不到(FAT 被挤、
+    if (appfw_biglist_poll()) return base + appfw_biglist_count();
+    // 大清单模式粘住(见 appfw_biglist_available):临时读不到(FAT 被挤、
     // 上传中)返回缓存的条数,绝不静默掉回 48 台出厂清单。
-    if (radio_biglist_available()) return base + radio_biglist_count();
+    if (appfw_biglist_available()) return base + appfw_biglist_count();
     // 大清单在运行中被删除(恢复出厂/手动)后回落小清单:开机时走大清单
     // 分支没读过 NVS 条数,这里捡一次。
     static bool picked;
@@ -173,27 +173,31 @@ int radio_store_count(void)
     return (int)s_count;
 }
 
-bool radio_store_readonly(void) { return radio_biglist_available(); }
+bool radio_store_readonly(void) { return appfw_biglist_available(); }
 
 bool radio_store_get(int idx, radio_station_t *out)
 {
     if (!out) return false;
-    if (radio_biglist_available()) {
+    if (appfw_biglist_available()) {
         const int base = radio_builtin_count();
         if (idx < base) return radio_builtin_get(idx, out);   // 内置在前
-        return radio_biglist_get(idx - base, out);
+        radio_station_t e;
+        const bool ok = appfw_biglist_get(idx - base, e.name, sizeof(e.name),
+                                          e.url, sizeof(e.url));
+        if (ok) *out = e;
+        return ok;
     }
     return get_entry(idx, out);
 }
 
 int radio_store_find(const char *name)
 {
-    if (radio_biglist_available()) {
+    if (appfw_biglist_available()) {
         radio_station_t b;
         for (int i = 0; i < radio_builtin_count(); i++) {
             if (radio_builtin_get(i, &b) && strcmp(b.name, name) == 0) return i;
         }
-        const int i = radio_biglist_find(name);
+        const int i = appfw_biglist_find(name);
         return i >= 0 ? i + radio_builtin_count() : -1;
     }
     return find_entry(name);
@@ -201,7 +205,7 @@ int radio_store_find(const char *name)
 
 bool radio_store_add(const char *name, const char *url)
 {
-    if (radio_biglist_available()) return false;   // 大清单只读,拒绝静默成功
+    if (appfw_biglist_available()) return false;   // 大清单只读,拒绝静默成功
     if (!name || !url) return false;
     const size_t nlen = strlen(name);
     if (nlen == 0 || nlen >= RADIO_NAME_MAX) return false;
@@ -227,7 +231,7 @@ bool radio_store_add(const char *name, const char *url)
 
 bool radio_store_remove(int idx)
 {
-    if (radio_biglist_available()) return false;
+    if (appfw_biglist_available()) return false;
     radio_station_t st;
     if (!get_entry(idx, &st)) return false;
     if (radio_store_is_builtin(st.name, st.url)) return false;
@@ -249,7 +253,7 @@ bool radio_store_remove(int idx)
 
 void radio_store_import_begin(void)
 {
-    if (radio_biglist_available()) return;   // 大清单只读:门户导入整体跳过
+    if (appfw_biglist_available()) return;   // 大清单只读:门户导入整体跳过
     char key[8];
     for (int i = 0; i < (int)s_count; i++) {
         key_of(i, key, sizeof(key));
@@ -263,7 +267,7 @@ int radio_store_restore_factory(void)
 {
     appfw_m3u_stats_t st = { 0 };
     // 大清单也算用户数据:恢复出厂 = 删 m3u/索引退回小清单,再物化出厂清单。
-    if (radio_biglist_available()) radio_biglist_discard();
+    if (appfw_biglist_available()) appfw_biglist_discard();
     radio_store_import_begin();
     materialize_builtin();
     appfw_m3u_parse(RADIO_M3U_DEFAULT, NULL, store_accept_http,
