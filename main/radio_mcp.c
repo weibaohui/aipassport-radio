@@ -12,6 +12,8 @@
 
 #include "appfw_biglist.h"
 #include "appfw_mcp.h"
+#include "appfw_net.h"
+#include "appfw_netlist.h"
 #include "appfw_storage.h"
 #include "radio_player.h"
 #include "radio_store.h"
@@ -157,6 +159,83 @@ static int tool_delete_playlist(cJSON *args, appfw_mcp_resp_t *resp)
     return 0;
 }
 
+// ---- WiFi 增强(WIFI 使能才挂载):添加/列出/删除已存热点 ----
+static int tool_wifi_add(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(args, "ssid");
+    const cJSON *pwd = cJSON_GetObjectItemCaseSensitive(args, "password");
+    const cJSON *now = cJSON_GetObjectItemCaseSensitive(args, "connect_now");
+    if (!cJSON_IsString(ssid) || !ssid->valuestring[0]) {
+        appfw_mcp_resp_addf(resp, "参数 ssid(string)缺失");
+        return 1;
+    }
+    const char *pwd_s = cJSON_IsString(pwd) ? pwd->valuestring : "";
+
+    appfw_netlist_t list;
+    appfw_netlist_reset(&list);
+    (void)appfw_store_netlist_load(&list);
+    if (!appfw_netlist_add(&list, ssid->valuestring, pwd_s)) {
+        appfw_mcp_resp_addf(resp, "添加失败:列表已满或参数过长");
+        return 1;
+    }
+    // 新加的设为首选(开机自动连接时优先试它)
+    (void)appfw_netlist_select(&list, ssid->valuestring);
+    (void)appfw_store_netlist_save(&list);
+    appfw_net_reload_config();
+    if (cJSON_IsTrue(now)) {
+        appfw_net_connect_ssid(ssid->valuestring);
+        appfw_mcp_resp_addf(resp, "已添加热点 %s 并正在连接,稍后用 wifi_status 查询结果",
+                            ssid->valuestring);
+    } else {
+        appfw_mcp_resp_addf(resp, "已添加热点 %s(未连接)", ssid->valuestring);
+    }
+    return 0;
+}
+
+static int tool_wifi_list_saved(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    appfw_netlist_t list;
+    if (!appfw_store_netlist_load(&list) || list.count == 0) {
+        appfw_mcp_resp_addf(resp, "没有已保存的热点");
+        return 0;
+    }
+    appfw_mcp_resp_addf(resp, "已保存 %d 个热点:", list.count);
+    for (int i = 0; i < list.count; i++) {
+        const bool open = list.items[i].pwd[0] == '\0';
+        appfw_mcp_resp_addf(resp, "\n%d. %s%s", i + 1, list.items[i].ssid,
+                            open ? "(开放网络)" : "");
+    }
+    return 0;
+}
+
+static int tool_wifi_remove(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    const cJSON *ssid = cJSON_GetObjectItemCaseSensitive(args, "ssid");
+    if (!cJSON_IsString(ssid) || !ssid->valuestring[0]) {
+        appfw_mcp_resp_addf(resp, "参数 ssid(string)缺失");
+        return 1;
+    }
+    appfw_netlist_t list;
+    if (!appfw_store_netlist_load(&list)) {
+        appfw_mcp_resp_addf(resp, "没有已保存的热点");
+        return 1;
+    }
+    for (int i = 0; i < list.count; i++) {
+        if (strcmp(list.items[i].ssid, ssid->valuestring) == 0) {
+            memmove(&list.items[i], &list.items[i + 1],
+                    sizeof(list.items[0]) * (size_t)(list.count - i - 1));
+            list.count--;
+            (void)appfw_store_netlist_save(&list);
+            appfw_net_reload_config();
+            appfw_mcp_resp_addf(resp, "已删除热点 %s", ssid->valuestring);
+            return 0;
+        }
+    }
+    appfw_mcp_resp_addf(resp, "%s 不在已保存列表里", ssid->valuestring);
+    return 1;
+}
+
 static const appfw_mcp_tool_t TOOLS[] = {
     { "play_index", "按下标播放电台(下标 1-6 是内置精品台)",
       "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}",
@@ -176,6 +255,14 @@ static const appfw_mcp_tool_t TOOLS[] = {
       tool_volume },
     { "get_state", "查询播放状态(台名/采样率/音量/错误)",
       "{}", tool_state },
+    { "wifi_add_hotspot", "添加新热点(名称+密码);connect_now=true 立即连接",
+      "{\"type\":\"object\",\"properties\":{\"ssid\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"connect_now\":{\"type\":\"boolean\"}},\"required\":[\"ssid\"]}",
+      tool_wifi_add },
+    { "wifi_list_saved", "列出已保存的热点",
+      "{}", tool_wifi_list_saved },
+    { "wifi_remove_hotspot", "从已保存列表删除一个热点",
+      "{\"type\":\"object\",\"properties\":{\"ssid\":{\"type\":\"string\"}},\"required\":[\"ssid\"]}",
+      tool_wifi_remove },
     { "delete_playlist_file", "删除上传的清单文件,回到内置 339 台(慎用)",
       "{}", tool_delete_playlist },
 };
