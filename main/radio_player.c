@@ -11,9 +11,6 @@
 #include <string.h>
 
 #include "bsp_audio.h"
-#include "esp_wifi.h"
-#include "esp_crt_bundle.h"
-#include "esp_http_client.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -28,7 +25,7 @@
 #include "radio_streams.h"
 #include "appfw_frame.h"
 #include "appfw_hls.h"
-#include "appfw_icy.h"
+#include "appfw_stream.h"
 #include "radio_mp3_probe.h"
 #include "radio_ts_probe.h"
 #include "radio_viz.h"
@@ -116,21 +113,6 @@ static size_t sbuf_read(sbuf_t *q, uint8_t *out, size_t len)
     return len;
 }
 
-// esp_http_client_read 直接收进环桶的连续段(零额外拷贝)。返回值同
-// esp_http_client_read:>0 数据(桶内新数据起点 (q->w - n) % cap,长度 n
-// 必然落在同一段内);0 = 暂无数据或对端关闭;-1 = 错误/超时。
-static int sbuf_http_read_into(sbuf_t *q, esp_http_client_handle_t client)
-{
-    const size_t free_bytes = sbuf_free(q);
-    if (free_bytes == 0) return 0;
-    const size_t w = q->w % q->cap;
-    size_t contig = q->cap - w;
-    if (contig > free_bytes) contig = free_bytes;
-    if (contig > FEED_CHUNK * 2) contig = FEED_CHUNK * 2;
-    const int n = esp_http_client_read(client, (char *)(q->buf + w), (int)contig);
-    if (n > 0) q->w += (size_t)n;
-    return n;
-}
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static radio_player_snap_t s_snap;
@@ -140,6 +122,8 @@ static volatile uint8_t s_lvl;
 
 // 音频 arena:开机预留 20KB,播放的全部缓冲从这里 bump 分配(见
 // radio_player_reserve/audio_arena_take),不与主堆互抢连续块。
+// HLS 播放列表文本缓冲也从 arena 出(传给框架传输层)。
+#define HLS_TEXT_CAP 4096
 
 // 切台请求:由 UI 线程写、任务读。用任务通知唤醒,避免忙等。
 static TaskHandle_t s_task;
@@ -153,10 +137,6 @@ static volatile uint8_t s_applied_vol;      // codec 当前实际套用的音量
 // 音频专用 arena(开机预留 20KB,常驻):环桶/PCM/喂数/解复用缓冲全部从
 // 这里 bump 分配——若从主堆散着分配,会把 helix 解码器初始化需要的连续块
 // 挤碎(ret 10 刷屏、永远"正在连接")。解码器句柄仍从主堆分配。
-
-// ICY 解复用器:只有收听任务访问(见 appfw_icy.c,移植自 shulinbao/ai-passport-radio)。
-// 元数据字节在这里被剥掉,解码器只吃纯音频;曲名从解出的元数据块里取。
-static appfw_icy_t s_icy;
 
 // 把 helix 首帧的惰性分配提前"烧"掉:喂一小段内嵌 MP3(radio_mp3_probe.h),
 // 让它的 ~20KB 在解码器预留洞里落位——必须发生在连接之前,否则 https 的
@@ -194,139 +174,6 @@ static void dec_prewarm(esp_audio_simple_dec_handle_t dec,
     ESP_LOGI(TAG, "解码器预热完成(%d 轮)", rounds);
 }
 
-// ---------------------------------------------------------------- HLS(m3u8)
-
-// 只做"直播收音机够用"的 HLS:首切最新段(直播)/顺播全部(点播),段尽换段,
-// 每秒重查列表追新。加密段、多级变体(仅一层展开)、广告拼接都不支持。
-// 状态全在收听任务上下文,收台即弃;播放列表文本用 arena 的 4KB。
-#define HLS_TEXT_CAP 4096
-#define HLS_URL_CAP  256
-static struct {
-    bool active;                  // 本台是 HLS
-    bool seg_open;                // 当前段请求在读
-    bool started;                 // 已切入首段
-    bool vod_done;                // 点播放完
-    uint64_t last_seq;            // 已切出的最后一段序号
-    uint32_t target_dur;          // 秒;追新等待的节奏参考
-    char playlist[HLS_URL_CAP];   // 当前播放列表地址(变体流会替换)
-} s_hls;
-static uint8_t *s_pl_buf;         // arena 里的播放列表文本缓冲
-
-// 取一个 URL 的响应体到 buf(截断到 cap)。返回长度;-1 失败。
-// 收听任务内阻塞调用。连接在请求间按 keep-alive 复用。
-static int hls_fetch(esp_http_client_handle_t client, const char *url,
-                     uint8_t *buf, size_t cap)
-{
-    esp_http_client_set_url(client, url);
-    // 手工跟随 30x(≤5 跳):infomaniak 这类 CDN 会把流 302 到别的域名/端口,
-    // 且 Location 的 scheme 是大写 "HTTP://",esp_http_client 不自动跟。
-    int status = 0;
-    for (int hop = 0; hop < 5; hop++) {
-        if (esp_http_client_open(client, 0) != ESP_OK) return -1;
-        (void)esp_http_client_fetch_headers(client);
-        status = esp_http_client_get_status_code(client);
-        if (status < 300 || status >= 400) break;
-        char *loc = NULL;
-        esp_http_client_get_header(client, "Location", &loc);
-        if (!loc || !loc[0]) break;
-        ESP_LOGI(TAG, "HLS 跟随重定向(%d): %s", status, loc);
-        esp_http_client_set_url(client, loc);
-        esp_http_client_close(client);
-    }
-    if (status < 200 || status >= 300) return -1;
-    size_t used = 0;
-    while (used < cap) {
-        const int n = esp_http_client_read(client, (char *)buf + used, (int)(cap - used));
-        if (n > 0) { used += (size_t)n; continue; }
-        break;                     // 读完(0)或出错(-1,按截断处理)
-    }
-    buf[used ? used - 1 : 0] = '\0';
-    return (int)used;
-}
-
-// 换到下一段:刷播放列表 → 挑段 → open。返回 1=已开新段,0=点播放完,-1=故障。
-static int hls_advance(esp_http_client_handle_t client)
-{
-    int depth = 0;                 // 变体流(m3u8 套 m3u8)最多展开一层
-    for (int attempt = 0; attempt < 20; attempt++) {
-        if (hls_fetch(client, s_hls.playlist, s_pl_buf, HLS_TEXT_CAP) <= 0) {
-            ESP_LOGW(TAG, "[hls] 取列表失败 attempt=%d", attempt);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-        appfw_hls_pick_t pick;
-        const bool ok = appfw_hls_pick_segment((const char *)s_pl_buf, s_hls.playlist,
-                                         !s_hls.started,
-                                         s_hls.started ? s_hls.last_seq : UINT64_MAX,
-                                         &pick);
-        if (!ok) {
-            if (pick.endlist && s_hls.started) { s_hls.vod_done = true; return 0; }
-            ESP_LOGW(TAG, "[hls] 无新段 last_seq=%llu attempt=%d",
-                     (unsigned long long)s_hls.last_seq, attempt);
-            vTaskDelay(pdMS_TO_TICKS(1000));   // 直播追新:每秒重查一次列表
-            continue;
-        }
-        if (pick.is_playlist) {
-            if (++depth > 2) return -1;
-            snprintf(s_hls.playlist, sizeof(s_hls.playlist), "%s", pick.seg_url);
-            continue;
-        }
-        // 点播收尾:ENDLIST 列表的"最新段"已经放过了,就是放完了。
-        // 直播列表不会走到这里(没新段时 pick 直接失败,走上面的等待分支)。
-        if (s_hls.started && pick.media_seq == s_hls.last_seq) {
-            s_hls.vod_done = true;
-            return 0;
-        }
-        esp_http_client_set_url(client, pick.seg_url);
-        if (esp_http_client_open(client, 0) != ESP_OK) {
-            ESP_LOGW(TAG, "[hls] 段 open 失败:%.60s", pick.seg_url);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-        (void)esp_http_client_fetch_headers(client);
-        const int status = esp_http_client_get_status_code(client);
-        if (status < 200 || status >= 300) {
-            ESP_LOGW(TAG, "[hls] 段 HTTP %d:%.60s", status, pick.seg_url);
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            continue;
-        }
-        ESP_LOGI(TAG, "[hls] 段就绪 seq=%llu:%.60s",
-                 (unsigned long long)pick.media_seq, pick.seg_url);
-        s_hls.seg_open = true;
-        s_hls.started = true;
-        s_hls.last_seq = pick.media_seq;
-        s_hls.target_dur = pick.target_dur;
-        return 1;
-    }
-    return -1;
-}
-
-// 统一读流入口:直连就是一次 esp_http_client_read;HLS 在这里完成段轮换。
-// 返回 >0 数据;0=点播自然结束;与直连一致,<0 由调用方按故障收尾。
-static int src_read(esp_http_client_handle_t client, uint8_t *out, size_t cap)
-{
-    if (!s_hls.active) {
-        return esp_http_client_read(client, (char *)out, (int)cap);
-    }
-    int stalls = 0;                // 连续取不到新段(含取列表失败)的轮数
-    for (;;) {
-        if (s_hls.seg_open) {
-            const int n = esp_http_client_read(client, (char *)out, (int)cap);
-            if (n > 0) return n;
-            ESP_LOGI(TAG, "[hls] 段结束(%d),回收连接换段", n);
-            s_hls.seg_open = false;
-            esp_http_client_close(client);   // CDN 常在段后掐断 keep-alive:
-        }                                    // 不回收,后续 open 全在死连接上失败
-        if (s_hls.vod_done) return 0;
-        const int adv = hls_advance(client);
-        if (adv > 0) { stalls = 0; continue; }
-        if (s_hls.vod_done) return 0;
-        if (++stalls >= 3) {
-            ESP_LOGW(TAG, "[hls] 连续 %d 轮取段失败,整流重启", stalls);
-            return -1;
-        }
-    }
-}
 
 static void set_snap(radio_state_t st, radio_err_t err)
 {
@@ -572,36 +419,26 @@ advance:
     return RADIO_ERR_NONE;
 }
 
+// 框架传输层的 ICY 曲名回调:落快照(与收听任务同上下文,无并发问题)。
+static void stream_title_cb(void *user, const char *title)
+{
+    (void)user;
+    set_title(title);
+}
+
 // ---------------------------------------------------------------- 收听一轮
 
 // 尝试完整收听一个流,返回错误码。成功会一直播到 s_quit 或断流。
-// ---- 响应头探针:icy-metaint 只能经 HTTP_EVENT_ON_HEADER 拿到 ----
-// (esp_http_client_get_header 读的是请求头,拿不到响应头——参考固件踩过)。
-typedef struct {
-    uint32_t metaint;
-} http_probe_t;
-
-static esp_err_t http_event_cb(esp_http_client_event_t *evt)
-{
-    http_probe_t *probe = (http_probe_t *)evt->user_data;
-    if (probe == NULL || evt->event_id != HTTP_EVENT_ON_HEADER) return ESP_OK;
-    if (evt->header_key == NULL || evt->header_value == NULL) return ESP_OK;
-    if (strcasecmp(evt->header_key, "icy-metaint") == 0) {
-        probe->metaint = (uint32_t)strtoul(evt->header_value, NULL, 10);
-    }
-    return ESP_OK;
-}
-
 static radio_err_t run_one_stream(const char *url, bool *played)
 {
     radio_err_t result = RADIO_ERR_NONE;
     esp_audio_simple_dec_handle_t dec = NULL;
-    esp_http_client_handle_t client = NULL;
+    appfw_stream_t *stream = NULL;
     uint8_t *pcm = NULL;
     uint8_t *ring_buf = NULL;
     uint8_t *feed = NULL;
     uint8_t *scratch = NULL;
-    http_probe_t probe = { 0 };
+    uint8_t *pl_buf = NULL;
     size_t ring_cap = 0;
     sbuf_t ring = { 0 };
     size_t prefill = 0;
@@ -622,13 +459,8 @@ static radio_err_t run_one_stream(const char *url, bool *played)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     // HLS(.m3u8):解码器走 TS(内部 AAC);直连(.mp3)走 MP3。
-    memset(&s_hls, 0, sizeof(s_hls));
+    // HLS(.m3u8):解码器走 TS(内部 AAC);直链走 MP3。
     const bool is_hls = appfw_hls_is_playlist_url(url);
-    s_hls.active = is_hls;
-    if (is_hls) {
-        snprintf(s_hls.playlist, sizeof(s_hls.playlist), "%s", url);
-        ESP_LOGI(TAG, "HLS 台:%s", url);
-    }
     const esp_audio_simple_dec_cfg_t dcfg = {
         .dec_type = is_hls ? ESP_AUDIO_SIMPLE_DEC_TYPE_TS : ESP_AUDIO_SIMPLE_DEC_TYPE_MP3,
         .dec_cfg = NULL,
@@ -643,9 +475,6 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     }
     // (不再卸载 FAT:清单里已无 HLS,FAT 常驻 ~8KB 完全可承受。此前每次
     // 切台都卸载+重挂,挂载一旦失败(句柄漏光)就表现为"第 7 台起切不动"。)
-    // WiFi 退出省电(modem sleep):内存紧张时 PS 模式的突发收包会被压到
-    // 几 KB/s,HLS 直播流(段 200KB/10s)必断。播音期间不需要省电。
-    esp_wifi_set_ps(WIFI_PS_NONE);
     // 解码器预留块先行释放:helix 初始化要 ~20KB 连续堆,先给它腾地方。
     if (s_dec_reserve) {
         free(s_dec_reserve);
@@ -665,8 +494,8 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     feed = audio_arena_take(FEED_CHUNK);
     scratch = audio_arena_take(FEED_CHUNK);
     if (is_hls) {
-        s_pl_buf = audio_arena_take(HLS_TEXT_CAP);
-        if (!s_pl_buf) {
+        pl_buf = audio_arena_take(HLS_TEXT_CAP);
+        if (!pl_buf) {
             ESP_LOGE(TAG, "arena 分配失败(播放列表缓冲)");
             result = RADIO_ERR_DECODE;
             goto done;
@@ -686,58 +515,21 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     // 连接前预热解码器(见 dec_prewarm):解码器的 ~20KB 必须先于 TLS 落位。
     dec_prewarm(dec, dcfg.dec_type, pcm, PCM_BUF_SIZE);
 
-    // ---- 连接(esp_http_client:http/https 通吃,https 走证书包) ----
-    const esp_http_client_config_t cfg = {
+    // ---- 连接(传输层在框架:重定向/HLS 段轮换/ICY 剥离/http 分身回退) ----
+    const appfw_stream_cfg_t scfg = {
         .url = url,
-        .user_agent = "AI-Passport-Radio/1.0",   // 别伪装浏览器:有的 CDN 对浏览器
-                                                 // UA 会在 32KB 处掐断(参考固件实测)
-        .buffer_size = 2048,
-        .buffer_size_tx = 512,
-        .timeout_ms = 10000,
-        .keep_alive_enable = true,
-        .event_handler = http_event_cb,          // 从响应头取 icy-metaint
-        .user_data = &probe,
-        .crt_bundle_attach = (strncmp(url, "https://", 8) == 0)
-                                 ? esp_crt_bundle_attach : NULL,
+        .playlist = (char *)pl_buf,
+        .playlist_cap = is_hls ? HLS_TEXT_CAP : 0,
+        .on_title = stream_title_cb,
     };
-    client = esp_http_client_init(&cfg);
-    if (!client) {
-        ESP_LOGE(TAG, "HTTP 客户端创建失败");
-        result = RADIO_ERR_CONNECT;
+    const appfw_stream_err_t se = appfw_stream_open(&stream, &scfg);
+    if (se != APPFW_STREAM_ERR_NONE) {
+        result = (se == APPFW_STREAM_ERR_HTTP)   ? RADIO_ERR_HTTP
+               : (se == APPFW_STREAM_ERR_URL)    ? RADIO_ERR_URL
+                                                 : RADIO_ERR_CONNECT;
         goto done;
     }
-    if (!is_hls) {
-        // 直连:打开流并校验状态。HLS 不在这里打开——首个响应是播放列表文本,
-        // 留给 src_read/hls_advance 统一管理(段与列表共用这条 keep-alive 连接)。
-        // 手工跟随 30x(≤5 跳,理由同 hls_fetch)。
-        int status = 0;
-        int hop;
-        for (hop = 0; hop < 5; hop++) {
-            if (esp_http_client_open(client, 0) != ESP_OK) {
-                ESP_LOGW(TAG, "打开流失败: %s", url);
-                result = RADIO_ERR_CONNECT;
-                goto done;
-            }
-            (void)esp_http_client_fetch_headers(client);
-            status = esp_http_client_get_status_code(client);
-            if (status < 300 || status >= 400) break;
-            char *loc = NULL;
-            esp_http_client_get_header(client, "Location", &loc);
-            if (!loc || !loc[0]) break;
-            ESP_LOGI(TAG, "跟随重定向(%d): %s", status, loc);
-            esp_http_client_set_url(client, loc);
-            esp_http_client_close(client);
-        }
-        if (status < 200 || status >= 300) {
-            ESP_LOGW(TAG, "HTTP 状态码 %d", status);
-            result = RADIO_ERR_HTTP;
-            goto done;
-        }
-    }
-    appfw_icy_init(&s_icy, probe.metaint);
-    ESP_LOGI(TAG, "已连接, icy-metaint=%u, 任务栈余量 %u 字节",
-             (unsigned)probe.metaint,
-             (unsigned)(uxTaskGetStackHighWaterMark(s_task) * sizeof(StackType_t)));
+    ESP_LOGI(TAG, "已连接:%s", appfw_stream_url(stream));
 
     // 换台:清掉"codec 已配好"的记忆,让新台的首帧按**它自己的**采样率
     // 重新 open 一次。不清的话会沿用上一台的采样率,播出来速率错位。
@@ -763,7 +555,7 @@ static radio_err_t run_one_stream(const char *url, bool *played)
 
         // 暂停:保持连接,读到的音频直接丢弃;恢复即从最新流继续(直播语义)。
         if (s_paused) {
-            const int n = src_read(client, feed, FEED_CHUNK);
+            const int n = appfw_stream_read(stream, feed, FEED_CHUNK);
             if (n > 0) { s_lvl = 0; timeouts = 0; continue; }
             if (n == 0) { if (++empty >= 3) { eof = true; } vTaskDelay(pdMS_TO_TICKS(20)); continue; }
             result = RADIO_ERR_CONNECT;
@@ -771,21 +563,13 @@ static radio_err_t run_one_stream(const char *url, bool *played)
         }
 
         // 补桶:桶低于水位才读(读会阻塞到数据到达;桶里还有料时不读,防饥饿)。
-        // 读进 scratch 后就地剥 ICY 元数据,只有音频字节才进环桶。
-        // HLS 模式下 src_read 内部完成段轮换/列表刷新(阻塞直到有数据)。
+        // 框架传输层读出的就是剥完 ICY 的纯音频;HLS 的段轮换/列表刷新也在
+        // 里面完成(阻塞直到有数据)。曲名经 on_title 回调落到快照。
         while (!eof && sbuf_used(&ring) < prefill) {
-            const int n = src_read(client, scratch, FEED_CHUNK);
+            const int n = appfw_stream_read(stream, scratch, FEED_CHUNK);
             if (n > 0) {
                 timeouts = 0; empty = 0;
-                size_t alen = 0;
-                for (int i = 0; i < n; i++) {
-                    if (appfw_icy_consume(&s_icy, scratch[i]) == APPFW_ICY_AUDIO) {
-                        scratch[alen++] = scratch[i];
-                    }
-                }
-                const char *t = appfw_icy_title(&s_icy);
-                if (t[0]) set_title(t);
-                if (alen) sbuf_write(&ring, scratch, alen);
+                sbuf_write(&ring, scratch, (size_t)n);
                 continue;
             }
             if (n == 0) {
@@ -830,7 +614,7 @@ static radio_err_t run_one_stream(const char *url, bool *played)
     }
 
 done:
-    if (client) esp_http_client_cleanup(client);
+    appfw_stream_close(stream);
     esp_audio_simple_dec_close(dec);
     reacquire_reserve_force();
     // 收台:让 codec 回到静音。ES8311 配好格式后会一直按当前采样率输出,
@@ -879,7 +663,6 @@ static void player_task(void *arg)
     (void)arg;
     int failures = 0;                    // 同一台连续失败的次数(吸收参考实现:封顶止损)
     char last_url[RADIO_URL_MAX] = "";
-    bool http_tried = false;             // 本台已试过 http 分身(每台最多一次)
 
     for (;;) {
         // 等切台请求。radio_play/radio_stop 会发任务通知把这里立刻叫醒;
@@ -913,29 +696,11 @@ static void player_task(void *arg)
         if (strcmp(url, last_url) != 0) {
             snprintf(last_url, sizeof(last_url), "%s", url);
             failures = 0;
-            http_tried = false;
         }
 
         bool played = false;
         const radio_err_t err = run_one_stream(url, &played);
         if (s_quit) { s_quit = false; continue; }          // 用户切台,不算失败
-
-        // https 直链在设备上常被 CDN 起流 1-2 秒后掐断(TLS 读错误,同一 URL
-        // 的 http 分身与桌面机均持续健康,真机批量诊断证实):换 http 分身
-        // 重试一次,不计入失败退避。解码失败换协议没用,不走这条。
-        if (err != RADIO_ERR_NONE && err != RADIO_ERR_DECODE && !http_tried &&
-            strncmp(url, "https://", 8) == 0) {
-            http_tried = true;
-            memmove(url + 7, url + 8, strlen(url) - 8 + 1);
-            memcpy(url, "http://", 7);
-            snprintf(last_url, sizeof(last_url), "%s", url);
-            ESP_LOGI(TAG, "https 被掐,换 http 分身:%s", url);
-            portENTER_CRITICAL(&s_lock);
-            snprintf(s_req_url, sizeof(s_req_url), "%s", url);
-            s_req_pending = true;
-            portEXIT_CRITICAL(&s_lock);
-            continue;
-        }
 
         if (err == RADIO_ERR_NONE && played) {
             // 播出过声音说明这个台是活的,只是断流了:短暂等待后重连同一台。
