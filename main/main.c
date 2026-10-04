@@ -139,6 +139,8 @@ void app_main(void)
         // 音量交给框架设置菜单;主页按键全被 home_key 接管,默认入口关掉。
         .menu_opts = k_menu_opts,
         .menu_opts_count = 1,
+        // 收音机没有"周期拉数据"的概念,隐藏无意义的刷新周期项;其余保留。
+        .builtin_hide = APPFW_MENU_REFRESH,
         .menu_open_btn = 0xFF,
         .page_reset = radio_pages_page_reset,
     };
