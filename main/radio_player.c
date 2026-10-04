@@ -879,6 +879,7 @@ static void player_task(void *arg)
     (void)arg;
     int failures = 0;                    // 同一台连续失败的次数(吸收参考实现:封顶止损)
     char last_url[RADIO_URL_MAX] = "";
+    bool http_tried = false;             // 本台已试过 http 分身(每台最多一次)
 
     for (;;) {
         // 等切台请求。radio_play/radio_stop 会发任务通知把这里立刻叫醒;
@@ -912,11 +913,29 @@ static void player_task(void *arg)
         if (strcmp(url, last_url) != 0) {
             snprintf(last_url, sizeof(last_url), "%s", url);
             failures = 0;
+            http_tried = false;
         }
 
         bool played = false;
         const radio_err_t err = run_one_stream(url, &played);
         if (s_quit) { s_quit = false; continue; }          // 用户切台,不算失败
+
+        // https 直链在设备上常被 CDN 起流 1-2 秒后掐断(TLS 读错误,同一 URL
+        // 的 http 分身与桌面机均持续健康,真机批量诊断证实):换 http 分身
+        // 重试一次,不计入失败退避。解码失败换协议没用,不走这条。
+        if (err != RADIO_ERR_NONE && err != RADIO_ERR_DECODE && !http_tried &&
+            strncmp(url, "https://", 8) == 0) {
+            http_tried = true;
+            memmove(url + 7, url + 8, strlen(url) - 8 + 1);
+            memcpy(url, "http://", 7);
+            snprintf(last_url, sizeof(last_url), "%s", url);
+            ESP_LOGI(TAG, "https 被掐,换 http 分身:%s", url);
+            portENTER_CRITICAL(&s_lock);
+            snprintf(s_req_url, sizeof(s_req_url), "%s", url);
+            s_req_pending = true;
+            portEXIT_CRITICAL(&s_lock);
+            continue;
+        }
 
         if (err == RADIO_ERR_NONE && played) {
             // 播出过声音说明这个台是活的,只是断流了:短暂等待后重连同一台。
