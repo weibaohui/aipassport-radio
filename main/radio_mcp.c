@@ -7,7 +7,10 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "appfw_biglist.h"
 #include "appfw_mcp.h"
@@ -19,19 +22,22 @@ static const char *TAG = "radio_mcp";
 
 static int tool_play_index(cJSON *args, appfw_mcp_resp_t *resp)
 {
+    // 与 list/search 显示一致:1 = 第 1 台(内置精品第一行)。
     const cJSON *idx = cJSON_GetObjectItemCaseSensitive(args, "index");
     if (!cJSON_IsNumber(idx)) {
-        appfw_mcp_resp_addf(resp, "参数 index(int)缺失");
+        appfw_mcp_resp_addf(resp, "参数 index(int,从 1 开始)缺失");
         return 1;
     }
+    const int one = idx->valueint;
+    const int total = radio_store_count();
     radio_station_t st;
-    if (!radio_store_get(idx->valueint, &st)) {
-        appfw_mcp_resp_addf(resp, "下标 %d 不存在(共 %d 台,内置在前)",
-                            idx->valueint, radio_store_count());
+    if (one < 1 || one > total || !radio_store_get(one - 1, &st)) {
+        appfw_mcp_resp_addf(resp, "下标 %d 不存在(有效范围 1-%d)",
+                            one, total);
         return 1;
     }
     radio_play(st.name, st.url);
-    appfw_mcp_resp_addf(resp, "正在播放第 %d 台:%s", idx->valueint, st.name);
+    appfw_mcp_resp_addf(resp, "正在播放第 %d 台:%s", one, st.name);
     return 0;
 }
 
@@ -54,7 +60,7 @@ static int tool_play_name(cJSON *args, appfw_mcp_resp_t *resp)
         return 1;
     }
     radio_play(st.name, st.url);
-    appfw_mcp_resp_addf(resp, "正在播放第 %d 台:%s", idx, st.name);
+    appfw_mcp_resp_addf(resp, "正在播放第 %d 台:%s", idx + 1, st.name);
     return 0;
 }
 
@@ -153,6 +159,44 @@ static int tool_delete_playlist(cJSON *args, appfw_mcp_resp_t *resp)
     return 0;
 }
 
+static int tool_device_info(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    const esp_app_desc_t *app = esp_app_get_description();
+    appfw_mcp_resp_addf(resp,
+        "固件 %s %s | 空闲堆 %uKB(最大块 %uKB) | 运行 %u 分钟 | 清单 %d 台",
+        app->project_name, app->version,
+        (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024),
+        (unsigned)(esp_timer_get_time() / 60000000LL),
+        radio_store_count());
+    return 0;
+}
+
+static int tool_screen_off(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    // 框架能力:熄屏时间(秒;0=永不)。合法档位与设置菜单一致。
+    static const uint16_t OKV[] = { 0, 60, 300, 600, 900, 1800 };
+    const cJSON *v = cJSON_GetObjectItemCaseSensitive(args, "seconds");
+    if (!cJSON_IsNumber(v)) {
+        uint16_t cur = 0;
+        (void)appfw_store_get_screen_off(&cur);
+        appfw_mcp_resp_addf(resp, "当前熄屏时间 %u 秒(0=永不);可设 0/60/300/600/900/1800",
+                            (unsigned)cur);
+        return 0;
+    }
+    for (unsigned i = 0; i < sizeof(OKV) / sizeof(OKV[0]); i++) {
+        if (OKV[i] == (uint16_t)v->valueint) {
+            (void)appfw_store_set_screen_off(OKV[i]);
+            appfw_mcp_resp_addf(resp, "熄屏时间已设为 %d 秒%s",
+                                v->valueint, v->valueint == 0 ? "(永不)" : "");
+            return 0;
+        }
+    }
+    appfw_mcp_resp_addf(resp, "非法值 %d:可选 0/60/300/600/900/1800", v->valueint);
+    return 1;
+}
+
 static const appfw_mcp_tool_t TOOLS[] = {
     { "play_index", "按下标播放电台(下标 1-6 是内置精品台)",
       "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}",
@@ -172,6 +216,10 @@ static const appfw_mcp_tool_t TOOLS[] = {
       tool_volume },
     { "get_state", "查询播放状态(台名/采样率/音量/错误)",
       "{}", tool_state },
+    { "get_device_info", "查询设备信息(固件版本/内存/运行时长/电台数)",
+      "{}", tool_device_info },
+    { "set_screen_off", "设置屏幕熄屏时间(秒;0=永不;不带参数=查询当前值)",
+      "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\"}}}", tool_screen_off },
     { "delete_playlist_file", "删除上传的清单文件,回到内置 339 台(慎用)",
       "{}", tool_delete_playlist },
 };
