@@ -33,6 +33,7 @@ typedef struct {
     radio_state_t state;
     radio_err_t err_code;
     char station[RADIO_URL_MAX > 32 ? 32 : RADIO_URL_MAX]; // 当前台名
+    char url[RADIO_URL_MAX];                               // 当前流地址
     char title[RADIO_TITLE_MAX];                           // ICY 正在播放
     uint32_t sample_rate;   // 解码器上报的实际采样率
     uint8_t channels;       // 实际声道数(解码器上报)

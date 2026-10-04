@@ -684,6 +684,7 @@ static void player_task(void *arg)
         snprintf(name, sizeof(name), "%s", s_req_name);
         s_snap.station[0] = '\0';
         snprintf(s_snap.station, sizeof(s_snap.station), "%s", name);
+        snprintf(s_snap.url, sizeof(s_snap.url), "%s", url);
         s_snap.sample_rate = 0;
         s_snap.channels = 0;
         s_snap.title[0] = '\0';

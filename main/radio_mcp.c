@@ -1,14 +1,15 @@
 // main/radio_mcp.c —— 收音机的 MCP 工具表:把点播/搜台/音量/状态开放给
 // 局域网里的 AI 宿主。协议壳在框架(appfw_mcp),本文件只有"工具做什么"。
-// 工具跑在门户 httpd 任务上下文:radio_play/radio_stop 本就线程安全;
-// 清单读取沿用 store 的按需挂载路径。
+// 工具跑在 MCP 服务的 ai_mcp 任务上下文:radio_play/radio_stop 本就线程
+// 安全;清单读写沿用 store 的按需路径。当前台从播放器快照实时反查,
+// 与按键/门户/MCP 三条播放路径天然一致,不另存会话状态。
 #include "radio_mcp.h"
 
 #include <string.h>
 
 #include "esp_heap_caps.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 
 #include "appfw_mcp.h"
 #include "appfw_net.h"
@@ -18,6 +19,16 @@
 #include "radio_store.h"
 
 static const char *TAG = "radio_mcp";
+
+// 当前播放中的台在清单里的下标(未在播 -1)。
+static int current_index(void)
+{
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    if (s.state != RADIO_PLAYING && s.state != RADIO_CONNECTING) return -1;
+    if (!s.station[0]) return -1;
+    return radio_store_find(s.station);
+}
 
 static int tool_play_index(cJSON *args, appfw_mcp_resp_t *resp)
 {
@@ -36,7 +47,8 @@ static int tool_play_index(cJSON *args, appfw_mcp_resp_t *resp)
         return 1;
     }
     radio_play(st.name, st.url);
-    appfw_mcp_resp_addf(resp, "正在播放第 %d 台:%s", one, st.name);
+    appfw_mcp_resp_addf(resp, "已切台:第 %d 台 %s(连接中,几秒后 get_state 确认)",
+                        one, st.name);
     return 0;
 }
 
@@ -59,7 +71,65 @@ static int tool_play_name(cJSON *args, appfw_mcp_resp_t *resp)
         return 1;
     }
     radio_play(st.name, st.url);
-    appfw_mcp_resp_addf(resp, "正在播放第 %d 台:%s", idx + 1, st.name);
+    appfw_mcp_resp_addf(resp, "已切台:第 %d 台 %s(连接中,几秒后 get_state 确认)",
+                        idx + 1, st.name);
+    return 0;
+}
+
+static int tool_next(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    const int total = radio_store_count();
+    if (total <= 0) { appfw_mcp_resp_addf(resp, "清单为空"); return 1; }
+    const int cur = current_index();
+    const int idx = (cur < 0) ? 0 : (cur + 1) % total;   // 没在播:从第一台开始
+    radio_station_t st;
+    if (!radio_store_get(idx, &st)) {
+        appfw_mcp_resp_addf(resp, "台目读取失败");
+        return 1;
+    }
+    radio_play(st.name, st.url);
+    appfw_mcp_resp_addf(resp, "已切台:第 %d 台 %s(连接中,几秒后 get_state 确认)",
+                        idx + 1, st.name);
+    return 0;
+}
+
+static int tool_prev(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    const int total = radio_store_count();
+    if (total <= 0) { appfw_mcp_resp_addf(resp, "清单为空"); return 1; }
+    const int cur = current_index();
+    const int idx = (cur < 0) ? total - 1 : (cur + total - 1) % total;
+    radio_station_t st;
+    if (!radio_store_get(idx, &st)) {
+        appfw_mcp_resp_addf(resp, "台目读取失败");
+        return 1;
+    }
+    radio_play(st.name, st.url);
+    appfw_mcp_resp_addf(resp, "已切台:第 %d 台 %s(连接中,几秒后 get_state 确认)",
+                        idx + 1, st.name);
+    return 0;
+}
+
+static int tool_random(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    const int total = radio_store_count();
+    if (total <= 0) { appfw_mcp_resp_addf(resp, "清单为空"); return 1; }
+    const int cur = current_index();
+    int idx = (int)(esp_random() % (unsigned)total);
+    if (cur >= 0 && total > 1) {                         // 避开当前台
+        while (idx == cur) idx = (int)(esp_random() % (unsigned)total);
+    }
+    radio_station_t st;
+    if (!radio_store_get(idx, &st)) {
+        appfw_mcp_resp_addf(resp, "台目读取失败");
+        return 1;
+    }
+    radio_play(st.name, st.url);
+    appfw_mcp_resp_addf(resp, "已切台:第 %d 台 %s(连接中,几秒后 get_state 确认)",
+                        idx + 1, st.name);
     return 0;
 }
 
@@ -95,6 +165,7 @@ static int tool_state(cJSON *args, appfw_mcp_resp_t *resp)
                         (unsigned)s.sample_rate, (unsigned)s.channels,
                         (unsigned)s.volume,
                         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    appfw_mcp_resp_addf(resp, " | 地址 %s", s.url[0] ? s.url : "--");
     if (s.state == RADIO_ERROR) {
         static const char *E[] = { "", "地址不合法", "解析失败", "连接失败",
                                    "服务端拒绝", "解码失败", "流已断" };
@@ -150,29 +221,8 @@ static int tool_search(cJSON *args, appfw_mcp_resp_t *resp)
     return 0;
 }
 
-static int tool_clear_imported(cJSON *args, appfw_mcp_resp_t *resp)
-{
-    (void)args;
-    radio_store_import_begin();
-    appfw_mcp_resp_addf(resp, "已清空自定义电台,回到内置 %d 台",
-                        radio_store_catalog_count());
-    return 0;
-}
-
-// ---- 清单导入(逐条):写入自定义台列表(NVS),台目不受影响 ----
-static int s_import_n;   // 本次导入会话已追加的条数(begin 清零)
-
-static int tool_import_begin(cJSON *args, appfw_mcp_resp_t *resp)
-{
-    (void)args;
-    radio_store_import_begin();
-    s_import_n = 0;
-    appfw_mcp_resp_addf(resp, "已清空自定义清单,开始导入(台目 %d 台不受影响)",
-                        radio_store_catalog_count());
-    return 0;
-}
-
-static int tool_import_add(cJSON *args, appfw_mcp_resp_t *resp)
+// ---- 自定义清单(NVS):单条即生效,台目段只读 ----
+static int tool_add_station(cJSON *args, appfw_mcp_resp_t *resp)
 {
     const cJSON *nm = cJSON_GetObjectItemCaseSensitive(args, "name");
     const cJSON *uu = cJSON_GetObjectItemCaseSensitive(args, "url");
@@ -182,24 +232,49 @@ static int tool_import_add(cJSON *args, appfw_mcp_resp_t *resp)
         return 1;
     }
     if (!radio_store_add(nm->valuestring, uu->valuestring)) {
-        appfw_mcp_resp_addf(resp, "追加失败:url 必须是 http(s) 直链且短于 %d 字节,"
+        appfw_mcp_resp_addf(resp, "添加失败:url 必须是 http(s) 直链且短于 %d 字节,"
                                   "名称不含控制字符;或自定义清单已满(上限 %d)",
                             RADIO_URL_MAX, RADIO_MAX_STATIONS);
         return 1;
     }
-    s_import_n++;
-    appfw_mcp_resp_addf(resp, "已加入第 %d 条:%s", s_import_n, nm->valuestring);
+    appfw_mcp_resp_addf(resp, "已加入 %s(自定义共 %d 台)", nm->valuestring,
+                        radio_store_count() - radio_store_catalog_count());
     return 0;
 }
 
-static int tool_import_finish(cJSON *args, appfw_mcp_resp_t *resp)
+static int tool_remove_station(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    const cJSON *idx = cJSON_GetObjectItemCaseSensitive(args, "index");
+    if (!cJSON_IsNumber(idx)) {
+        appfw_mcp_resp_addf(resp, "参数 index(int,从 1 开始)缺失");
+        return 1;
+    }
+    const int one = idx->valueint;
+    const int total = radio_store_count();
+    if (one < 1 || one > total) {
+        appfw_mcp_resp_addf(resp, "下标 %d 不存在(有效范围 1-%d)", one, total);
+        return 1;
+    }
+    if (one <= radio_store_catalog_count()) {
+        appfw_mcp_resp_addf(resp, "第 %d 台是内置台目,不可删除", one);
+        return 1;
+    }
+    radio_station_t st;
+    if (!radio_store_get(one - 1, &st) || !radio_store_remove(one - 1)) {
+        appfw_mcp_resp_addf(resp, "删除失败");
+        return 1;
+    }
+    appfw_mcp_resp_addf(resp, "已删除 %s(自定义剩 %d 台)", st.name,
+                        total - 1 - radio_store_catalog_count());
+    return 0;
+}
+
+static int tool_clear_custom(cJSON *args, appfw_mcp_resp_t *resp)
 {
     (void)args;
-    const int total = radio_store_count();
-    appfw_mcp_resp_addf(resp, "导入完成:清单共 %d 台(台目 %d + 自定义 %d),"
-                              "可用 list_stations 查看",
-                        total, radio_store_catalog_count(),
-                        total - radio_store_catalog_count());
+    radio_store_import_begin();
+    appfw_mcp_resp_addf(resp, "已清空自定义电台,回到内置 %d 台",
+                        radio_store_catalog_count());
     return 0;
 }
 
@@ -281,12 +356,18 @@ static int tool_wifi_remove(cJSON *args, appfw_mcp_resp_t *resp)
 }
 
 static const appfw_mcp_tool_t TOOLS[] = {
-    { "play_index", "按下标播放电台(下标 1-6 是内置精品台)",
+    { "play_index", "按下标播放电台(1 起的全清单编号,1-6 是内置精品台;编号用 search_stations/list_stations 查)",
       "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}",
       tool_play_index },
     { "play_name", "按确切台名播放;不确定名字先 search_stations",
       "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}},\"required\":[\"name\"]}",
       tool_play_name },
+    { "play_next", "播放下一台(到尾部绕回第一台;没在播则从第一台开始)",
+      "{}", tool_next },
+    { "play_prev", "播放上一台(到头部绕回最后一台)",
+      "{}", tool_prev },
+    { "play_random", "随机播放一台(避开当前台)",
+      "{}", tool_random },
     { "search_stations", "按关键词模糊搜台名,返回匹配的下标与名字",
       "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}},\"required\":[\"keyword\"]}",
       tool_search },
@@ -294,11 +375,19 @@ static const appfw_mcp_tool_t TOOLS[] = {
       "{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"integer\"},\"count\":{\"type\":\"integer\"}}}",
       tool_list },
     { "stop", "停止播放", "{}", tool_stop },
-    { "set_volume", "设置音量 0-100",
+    { "set_volume", "设置音量 0-100(存 NVS,重启保持)",
       "{\"type\":\"object\",\"properties\":{\"level\":{\"type\":\"integer\"}},\"required\":[\"level\"]}",
       tool_volume },
-    { "get_state", "查询播放状态(台名/采样率/音量/错误)",
+    { "get_state", "查询播放状态(台名/流地址/采样率/音量/错误)",
       "{}", tool_state },
+    { "playlist_add_station", "向自定义清单追加一台(台名+流媒体地址),单条即生效;同名已存在则改为新地址;内置台目不受影响",
+      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"url\":{\"type\":\"string\"}},\"required\":[\"name\",\"url\"]}",
+      tool_add_station },
+    { "playlist_remove_station", "从自定义清单删除一台(1 起的下标;1-345 是内置台目,不可删)",
+      "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}",
+      tool_remove_station },
+    { "playlist_clear_custom", "清空全部自定义电台,回到内置台目(慎用)",
+      "{}", tool_clear_custom },
     { "wifi_add_hotspot", "添加新热点(名称+密码);connect_now=true 立即连接",
       "{\"type\":\"object\",\"properties\":{\"ssid\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"connect_now\":{\"type\":\"boolean\"}},\"required\":[\"ssid\"]}",
       tool_wifi_add },
@@ -307,15 +396,6 @@ static const appfw_mcp_tool_t TOOLS[] = {
     { "wifi_remove_hotspot", "从已保存列表删除一个热点",
       "{\"type\":\"object\",\"properties\":{\"ssid\":{\"type\":\"string\"}},\"required\":[\"ssid\"]}",
       tool_wifi_remove },
-    { "playlist_clear_imported", "清空全部自定义电台,回到内置台目(慎用;重新导入用 playlist_import_begin)",
-      "{}", tool_clear_imported },
-    { "playlist_import_begin", "开始导入新清单:清空自定义电台(内置台目不受影响);之后逐条 playlist_import_add,最后 playlist_import_finish",
-      "{}", tool_import_begin },
-    { "playlist_import_add", "向清单追加一台(台名+流媒体地址);清单很大就一条一条调用,不必求快",
-      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"url\":{\"type\":\"string\"}},\"required\":[\"name\",\"url\"]}",
-      tool_import_add },
-    { "playlist_import_finish", "结束导入,返回清单总台数",
-      "{}", tool_import_finish },
 };
 
 void radio_mcp_init(void)
