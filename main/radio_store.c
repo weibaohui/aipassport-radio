@@ -9,7 +9,7 @@
 #include "esp_log.h"
 
 #include "radio_biglist.h"
-#include "radio_m3u.h"
+#include "appfw_m3u.h"
 #include "radio_m3u_default.h"
 
 static const char *TAG = "radio_store";
@@ -132,15 +132,15 @@ void radio_store_init(void)
     // (含用户改动,同名覆盖),否则落固件内嵌的出厂清单。
     s_count = 0;
     materialize_builtin();
-    radio_m3u_stats_t st = { 0 };
+    appfw_m3u_stats_t st = { 0 };
     char *buf = malloc(LEGACY_BUF_CAP);
     bool migrated = false;
     if (buf && appfw_store_get_str(STORE_LEGACY_KEY, buf, LEGACY_BUF_CAP) && buf[0]) {
-        radio_m3u_parse(buf, NULL, store_accept_http, NULL, migrate_entry_cb, &st);
+        appfw_m3u_parse(buf, NULL, store_accept_http, NULL, migrate_entry_cb, &st);
         migrated = st.accepted > 0;
         ESP_LOGI(TAG, "旧版 M3U 迁移:%d 台", st.accepted);
     } else {
-        radio_m3u_parse(RADIO_M3U_DEFAULT, NULL, store_accept_http,
+        appfw_m3u_parse(RADIO_M3U_DEFAULT, NULL, store_accept_http,
                         NULL, migrate_entry_cb, &st);
         ESP_LOGI(TAG, "物化出厂清单:+%d 台", st.accepted);
     }
@@ -261,12 +261,12 @@ void radio_store_import_begin(void)
 
 int radio_store_restore_factory(void)
 {
-    radio_m3u_stats_t st = { 0 };
+    appfw_m3u_stats_t st = { 0 };
     // 大清单也算用户数据:恢复出厂 = 删 m3u/索引退回小清单,再物化出厂清单。
     if (radio_biglist_available()) radio_biglist_discard();
     radio_store_import_begin();
     materialize_builtin();
-    radio_m3u_parse(RADIO_M3U_DEFAULT, NULL, store_accept_http,
+    appfw_m3u_parse(RADIO_M3U_DEFAULT, NULL, store_accept_http,
                     NULL, migrate_entry_cb, &st);
     (void)appfw_store_set_u16(STORE_CNT_KEY, s_count);
     ESP_LOGI(TAG, "恢复出厂清单:%u 台", (unsigned)s_count);

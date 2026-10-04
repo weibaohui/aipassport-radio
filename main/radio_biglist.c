@@ -49,7 +49,7 @@ static void path_of(const char *name, char *out, size_t cap)
 static void m3u_path(char *out, size_t cap) { path_of("radio.m3u", out, cap); }
 static void idx_path(char *out, size_t cap) { path_of("radio.idx", out, cap); }
 
-// 与 radio_m3u.c 同规:UTF-8 安全截断(截断点不落在多字节字符中间)。
+// 与 appfw_m3u.c 同规:UTF-8 安全截断(截断点不落在多字节字符中间)。
 static void copy_trunc(char *dst, size_t cap, const char *src, size_t len)
 {
     if (len >= cap) len = cap - 1;
@@ -146,7 +146,7 @@ static bool idx_valid(uint32_t m3u_size, uint16_t *out_count)
 }
 
 // 扫描 m3u 建索引:先写 radio.idx.tmp 占位头,流式扫完回填条数再原子改名。
-// 收录规则与 radio_m3u_parse 对齐:#EXTINF(取第一个逗号后的标题)配对的
+// 收录规则与 appfw_m3u_parse 对齐:#EXTINF(取第一个逗号后的标题)配对的
 // 下一行是 http/https URL 才收;注释行忽略;无配对的裸 URL 不收。
 static bool rebuild_index(uint32_t m3u_size, uint16_t *out_count)
 {

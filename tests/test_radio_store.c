@@ -6,7 +6,7 @@
 #include "radio_store.h"
 #include "radio_biglist.h"
 #include "appfw_storage.h"
-#include "radio_m3u.h"
+#include "appfw_m3u.h"
 #include "radio_m3u_default.h"
 #include "radio_player.h"
 
@@ -126,8 +126,8 @@ int main(void)
 
     // 解析出厂清单作为期望值(与 store 同款筛选),再按 store 同款合并语义
     // (同名覆盖、首现位置)折叠——出厂清单里有重名台,合并后台数 < 解析条数。
-    radio_m3u_stats_t st = { 0 };
-    radio_m3u_parse(RADIO_M3U_DEFAULT, NULL, accept_like_store,
+    appfw_m3u_stats_t st = { 0 };
+    appfw_m3u_parse(RADIO_M3U_DEFAULT, NULL, accept_like_store,
                     g_factory, collect_factory, &st);
     static radio_station_t g_expect[80];
     int expect_n = 0;

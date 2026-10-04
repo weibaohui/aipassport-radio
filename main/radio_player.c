@@ -26,9 +26,9 @@
 #include "simple_dec/esp_audio_simple_dec_default.h"
 
 #include "radio_streams.h"
-#include "radio_frame.h"
-#include "radio_hls.h"
-#include "radio_icy.h"
+#include "appfw_frame.h"
+#include "appfw_hls.h"
+#include "appfw_icy.h"
 #include "radio_mp3_probe.h"
 #include "radio_ts_probe.h"
 #include "radio_viz.h"
@@ -154,9 +154,9 @@ static volatile uint8_t s_applied_vol;      // codec 当前实际套用的音量
 // 这里 bump 分配——若从主堆散着分配,会把 helix 解码器初始化需要的连续块
 // 挤碎(ret 10 刷屏、永远"正在连接")。解码器句柄仍从主堆分配。
 
-// ICY 解复用器:只有收听任务访问(见 radio_icy.c,移植自 shulinbao/ai-passport-radio)。
+// ICY 解复用器:只有收听任务访问(见 appfw_icy.c,移植自 shulinbao/ai-passport-radio)。
 // 元数据字节在这里被剥掉,解码器只吃纯音频;曲名从解出的元数据块里取。
-static radio_icy_t s_icy;
+static appfw_icy_t s_icy;
 
 // 把 helix 首帧的惰性分配提前"烧"掉:喂一小段内嵌 MP3(radio_mp3_probe.h),
 // 让它的 ~20KB 在解码器预留洞里落位——必须发生在连接之前,否则 https 的
@@ -254,8 +254,8 @@ static int hls_advance(esp_http_client_handle_t client)
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        hls_pick_t pick;
-        const bool ok = hls_pick_segment((const char *)s_pl_buf, s_hls.playlist,
+        appfw_hls_pick_t pick;
+        const bool ok = appfw_hls_pick_segment((const char *)s_pl_buf, s_hls.playlist,
                                          !s_hls.started,
                                          s_hls.started ? s_hls.last_seq : UINT64_MAX,
                                          &pick);
@@ -623,7 +623,7 @@ static radio_err_t run_one_stream(const char *url, bool *played)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     // HLS(.m3u8):解码器走 TS(内部 AAC);直连(.mp3)走 MP3。
     memset(&s_hls, 0, sizeof(s_hls));
-    const bool is_hls = hls_is_playlist_url(url);
+    const bool is_hls = appfw_hls_is_playlist_url(url);
     s_hls.active = is_hls;
     if (is_hls) {
         snprintf(s_hls.playlist, sizeof(s_hls.playlist), "%s", url);
@@ -734,7 +734,7 @@ static radio_err_t run_one_stream(const char *url, bool *played)
             goto done;
         }
     }
-    radio_icy_init(&s_icy, probe.metaint);
+    appfw_icy_init(&s_icy, probe.metaint);
     ESP_LOGI(TAG, "已连接, icy-metaint=%u, 任务栈余量 %u 字节",
              (unsigned)probe.metaint,
              (unsigned)(uxTaskGetStackHighWaterMark(s_task) * sizeof(StackType_t)));
@@ -779,11 +779,11 @@ static radio_err_t run_one_stream(const char *url, bool *played)
                 timeouts = 0; empty = 0;
                 size_t alen = 0;
                 for (int i = 0; i < n; i++) {
-                    if (radio_icy_consume(&s_icy, scratch[i]) == RADIO_ICY_AUDIO) {
+                    if (appfw_icy_consume(&s_icy, scratch[i]) == APPFW_ICY_AUDIO) {
                         scratch[alen++] = scratch[i];
                     }
                 }
-                const char *t = radio_icy_title(&s_icy);
+                const char *t = appfw_icy_title(&s_icy);
                 if (t[0]) set_title(t);
                 if (alen) sbuf_write(&ring, scratch, alen);
                 continue;
