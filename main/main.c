@@ -26,6 +26,7 @@
 
 #include "radio_pages.h"
 #include "radio_mcp.h"
+#include "appfw_mcp.h"
 #include "radio_player.h"
 
 static const char *TAG = "main";
@@ -76,6 +77,9 @@ static void second_tick_cb(void *arg)
     appfw_ui_second_tick();
 }
 
+// 设置菜单显示哪些框架自带项(与 MCP 挂载的基础工具同一份配置)。
+#define APP_MENU_SHOW_MASK (APPFW_MENU_ITEM_ALL & ~APPFW_MENU_ITEM_REFRESH_PERIOD)
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "网络收音机(appfw)启动");
@@ -112,6 +116,8 @@ void app_main(void)
         ESP_LOGW(TAG, "WiFi 初始化返回 %d", net_err);
     }
     radio_mcp_init();             // MCP 工具表:AI 经门户 /mcp 操作设备
+    // 框架基础功能跟随菜单使能位:菜单显示的项,AI 也能操作;没显示的不挂载。
+    appfw_mcp_set_builtin_tools(APP_MENU_SHOW_MASK);
 
     // 载入电台列表(要在建页之前)。大清单模式下第一次 count 会"借洞"挂载
     // files 分区 FAT 建索引,空闲 10s 后自动卸载把预留补回。
@@ -142,7 +148,7 @@ void app_main(void)
         .menu_opts = k_menu_opts,
         .menu_opts_count = 1,
         // 内置菜单显式使能(默认全关):收音机要五项,刷新周期无意义不开。
-        .menu_show_mask = APPFW_MENU_ITEM_ALL & ~APPFW_MENU_ITEM_REFRESH_PERIOD,
+        .menu_show_mask = APP_MENU_SHOW_MASK,
         // 主页长按动作表:上=设置菜单,下=音量页(长按 OK 留给应用自己)。
         .long_press_up = APPFW_LONG_PRESS_OPEN_MENU,
         .long_press_down = APPFW_LONG_PRESS_OPEN_APP_OPTION_1,
