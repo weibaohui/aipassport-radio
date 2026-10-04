@@ -1,6 +1,10 @@
-# DEVELOPING.md —— 开发者文档
+<p align="right">
+  <a href="development.md">English</a> · <strong>简体中文</strong>
+</p>
 
-面向改代码的人。使用者请看 [README.md](README.md)。
+# aipassport-radio —— 开发文档
+
+面向改代码的人。使用者请看 [README](/README.md)。
 
 ## 环境与构建
 

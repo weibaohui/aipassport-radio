@@ -211,7 +211,7 @@ static void sanitize_title(const char *src, char *dst, size_t cap)
 // "假频谱"包络:两道波沿频段方向传播、8 帧一循环的静态表(ROM)。柱高 =
 // 真实音量电平 × 包络值/256 —— 全整数,无 FFT、无浮点、无逐采样统计。
 // 视觉上"有声音就动,越响越烈",不承诺频率真实性。
-static const uint8_t K_ENV[8][RADIO_VIZ_BANDS] = {
+static const uint8_t K_ENV[8][APPFW_VIZ_BANDS] = {
     {158, 229, 255, 229, 158,  87,  60,  87, 158, 229, 255, 229, 158,  87,  60,  87},
     {229, 255, 229, 158,  87,  60,  87, 158, 229, 255, 229, 158,  87,  60,  87, 158},
     {255, 229, 158,  87,  60,  87, 158, 229, 255, 229, 158,  87,  60,  87, 158, 229},
@@ -298,9 +298,9 @@ static void viz_timer_cb(lv_timer_t *timer)
     // 活动下限 60:轻声/停顿柱子仍有低幅度的舞动,响度越大起伏越大。
     const uint8_t lvl = radio_player_level();
     const uint8_t eff = lvl < 60 ? 60 : lvl;
-    uint8_t bands[RADIO_VIZ_BANDS];
-    static uint8_t disp[RADIO_VIZ_BANDS];   // 每根柱的平滑值(起快落慢)
-    for (int k = 0; k < RADIO_VIZ_BANDS; k++) {
+    uint8_t bands[APPFW_VIZ_BANDS];
+    static uint8_t disp[APPFW_VIZ_BANDS];   // 每根柱的平滑值(起快落慢)
+    for (int k = 0; k < APPFW_VIZ_BANDS; k++) {
         // >>7(而非 >>8):包络增益 ×2,中等响度就有可感的柱高。
         const uint16_t v = ((uint16_t)eff * K_ENV[tick8][k]) >> 7;
         const uint8_t target = (uint8_t)(v > 255 ? 255 : v);

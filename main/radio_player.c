@@ -28,7 +28,7 @@
 #include "appfw_stream.h"
 #include "radio_mp3_probe.h"
 #include "radio_ts_probe.h"
-#include "radio_viz.h"
+#include "appfw_viz.h"
 
 static const char *TAG = "radio_player";
 
@@ -238,33 +238,33 @@ static uint32_t s_coded_rate;
 
 // ---------------------------------------------------------------- 频谱快照
 
-// FFT 分析只跑在音频线程这一侧:radio_viz_render() 是带平滑的(上升 0.45 /
+// FFT 分析只跑在音频线程这一侧:appfw_viz_render() 是带平滑的(上升 0.45 /
 // 下降 0.10),必须和解码同频调用才有"律动"。UI 线程只读下面这 17 个字节,
-// 不碰 radio_viz_t 内部状态 —— 跨线程共享 buf/gain 会引出真正的竞态。
-static radio_viz_t s_viz;
+// 不碰 appfw_viz_t 内部状态 —— 跨线程共享 buf/gain 会引出真正的竞态。
+static appfw_viz_t s_viz;
 static uint32_t s_viz_rate;
-static uint8_t  s_viz_raw[RADIO_VIZ_BANDS];
+static uint8_t  s_viz_raw[APPFW_VIZ_BANDS];
 // 逐字节写、逐字节读。撕裂最多让某一帧的某一段跳一格,肉眼不可见;
 // 为这 17 字节上互斥量反而不值得。
-static volatile uint8_t s_viz_out[RADIO_VIZ_BANDS];
+static volatile uint8_t s_viz_out[APPFW_VIZ_BANDS];
 static volatile uint8_t s_viz_level;
 
 // 频谱动画已整体停用(2026-10-03):FFT 即便定点也占 ~1/4 CPU,仿真器上更是
 // 直接把解码挤到欠载。当前唯一目标是播放流畅——解码出的 PCM 只写 I2S。
-// 要恢复频谱:把 RADIO_VIZ_ENABLED 置 1 即可(实现完好,主机测试仍在跑)。
-#define RADIO_VIZ_ENABLED 0
+// 要恢复频谱:把 APPFW_VIZ_ENABLED 置 1 即可(实现完好,框架主机测试仍在跑)。
+#define APPFW_VIZ_ENABLED 0
 static void viz_feed(const int16_t *pcm, size_t bytes, uint32_t rate)
 {
-    if (!RADIO_VIZ_ENABLED) return;
+    if (!APPFW_VIZ_ENABLED) return;
     if (rate == 0) return;
     if (s_viz_rate != rate) {          // 换台/换流可能换采样率,分频要重算
-        radio_viz_init(&s_viz, (float)rate);
+        appfw_viz_init(&s_viz, (float)rate);
         s_viz_rate = rate;
     }
-    radio_viz_push(&s_viz, pcm, bytes);
-    radio_viz_render(&s_viz, s_viz_raw);
-    for (int k = 0; k < RADIO_VIZ_BANDS; k++) s_viz_out[k] = s_viz_raw[k];
-    s_viz_level = radio_viz_level(&s_viz);
+    appfw_viz_push(&s_viz, pcm, bytes);
+    appfw_viz_render(&s_viz, s_viz_raw);
+    for (int k = 0; k < APPFW_VIZ_BANDS; k++) s_viz_out[k] = s_viz_raw[k];
+    s_viz_level = appfw_viz_level(&s_viz);
 }
 
 void radio_player_viz_snapshot(uint8_t *out, uint8_t bands, uint8_t *level)

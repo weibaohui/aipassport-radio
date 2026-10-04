@@ -46,3 +46,6 @@ static inline bool appfw_store_get_screen_off(uint16_t *out) { *out = 300; retur
 static inline bool appfw_store_set_screen_off(uint16_t v) { (void)v; return true; }
 static inline bool appfw_store_get_period(uint16_t *out) { *out = 300; return true; }
 static inline bool appfw_store_set_period(uint16_t v) { (void)v; return true; }
+
+static inline bool appfw_store_get_brightness(uint16_t *pct) { *pct = 100; return true; }
+static inline bool appfw_store_set_brightness(uint16_t pct) { (void)pct; return true; }

@@ -1,6 +1,8 @@
 # 主机测试源文件映射:<stem> <源文件...>(相对仓库根)
 # 大清单文件模式已删(2026-10-04 拆 FAT):radio_store = 台目 rodata +
 # 自定义台逐条 NVS,不再依赖框架的 m3u/biglist。
+# 频谱分析 appfw_viz 连同测试已上移框架(2026-10-05),播放页跑应用的
+# 合成包络(K_ENV),真 FFT 由 RADIO->APPFW_VIZ_ENABLED 开关控制。
 # appfw_mcp 的协议核在框架:MCP 传输是常驻极简 TCP(不进主机测试),
 # 分发语义(握手/列举/调用/通知/错误码)在这里钉死。
 radio_store main/radio_store.c main/radio_streams.c

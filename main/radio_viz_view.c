@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "radio_viz.h"
+#include "appfw_viz.h"
 
 // ---- 版面常量(240x320) -----------------------------------------------------
 #define MARGIN_X     14
@@ -26,14 +26,9 @@
 #define VIZ_Y        206     // 频谱面板(贴近底部状态行,中段留给台名呼吸)
 #define VIZ_H        44
 #define VIZ_PAD      6
-#define VIZ_BOT      8
-#define VIZ_TOP      6
 
 #define STATUS_Y     262
 #define HINT_Y       280
-
-#define BAR_GAP      1
-#define MIN_BAR_H    4       // 再矮也留 4px,一排都是小圆头
 
 // ---- 配色 ------------------------------------------------------------------
 #define C_BG         0x080D14      // 整屏底色
@@ -41,32 +36,9 @@
 #define C_YELLOW     0xFFC531      // 应用名 / CH:黄
 #define C_TITLE      0xF2F6FA      // 台名:近白
 #define C_DIM        0x7A8899      // 副标题 / 电量
-#define C_VIZ_BG     0x16202E      // 频谱面板底
 #define C_OK         0x35C26B      // 播放中
 #define C_BAD        0xE5484D      // 出错
 #define C_HINT       0x5A6B7D
-
-// 柱色随高度(0..255)从青绿走到亮黄 —— 只有真正突出的频段才会变黄。
-//
-// 色相不是线性走的:用 gamma=1.6 把大部分柱子压在青绿区,只有最高的
-// 20% 才推到黄。线性映射的话中等响的柱子就已经是纯绿了,看着像
-// 绿→黄两段,少了参考图里那种"一片薄荷色里挑出几根黄的"层次。
-//
-// 注意 s/v 是**百分比 0-100**,lv_color_hsv_to_rgb 内部自己乘 255/100。
-// 当成 0-255 传会被 uint8_t 截断(231→77、218→37),整屏变成暗褐色,
-// 而且症状很隐蔽:条子照样画得出来,只是颜色全不对(踩过一次)。
-static lv_color_t bar_color(uint8_t lv255)
-{
-    const int t = lv255;
-    // gamma 必须是 0..100。早先用整数近似 (t*t*41)/(255*52) 想写
-    // (t/255)^1.6*100,结果 t=255 时算出 201,色相 172-249 变成负数,
-    // 一转 uint8_t 回绕成 179 —— 那一屏的柱子直接变成了蓝青色。
-    const int g = (int)(powf((float)t / 255.0f, 1.6f) * 100.0f + 0.5f);
-    const uint8_t h = (uint8_t)(172 - g * 124 / 100);   // 色相 172°(青)→ 48°(黄)
-    const uint8_t s = (uint8_t)(65 + t * 23 / 255);      // 饱和度 65% → 88%
-    const uint8_t v = (uint8_t)(55 + t * 45 / 255);      // 明度   55% → 100%
-    return lv_color_hsv_to_rgb(h, s, v);
-}
 
 static lv_obj_t *plain_obj(lv_obj_t *parent, int32_t w, int32_t h,
                            int32_t x, int32_t y, uint32_t color, int32_t radius)
@@ -145,23 +117,9 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
                              MARGIN_X, SUBTITLE_Y, "");
 
     // ---- 频谱面板(已无频率刻度:假频谱不做真实频率分析) ----
-    v->panel = plain_obj(v->root, PANEL_W, VIZ_H, PANEL_X, VIZ_Y, C_VIZ_BG, 8);
-    lv_obj_set_scrollbar_mode(v->panel, LV_SCROLLBAR_MODE_OFF);
-
-    v->baseline = VIZ_Y + VIZ_H - VIZ_BOT;
-    v->max_h    = VIZ_H - VIZ_TOP - VIZ_BOT;
-    {
-        const int32_t usable = PANEL_W - VIZ_PAD * 2;
-        v->slot  = usable / RADIO_VIZ_BAR_N;
-        v->bar_w = v->slot - BAR_GAP;
-        v->x0    = PANEL_X + VIZ_PAD + (usable - v->slot * RADIO_VIZ_BAR_N) / 2;
-    }
-
-    for (int k = 0; k < RADIO_VIZ_BAR_N; k++) {
-        v->bar[k] = plain_obj(v->root, v->bar_w, MIN_BAR_H,
-                              v->x0 + k * v->slot, v->baseline - MIN_BAR_H,
-                              0x1F8C86, v->bar_w / 2);   // 胶囊形柱顶
-    }
+    // 柱阵本体在框架(appfw_bars):柱数/最矮高度/内边距是应用的版面参数。
+    appfw_bars_create(&v->bars, v->root, PANEL_X, VIZ_Y, PANEL_W, VIZ_H,
+                      VIZ_PAD, 4, RADIO_VIZ_BAR_N);
 
     // ---- 状态 / 提示 ----
     v->status = flat_label(v->root, font16, C_OK, v->w - MARGIN_X * 2,
@@ -178,34 +136,9 @@ void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t le
 {
     if (!v || !v->root) return;
 
-    for (int j = 0; j < RADIO_VIZ_BAR_N; j++) {
-        // 一根柱子对应一个真实频段(BAR_N == RADIO_VIZ_BANDS 时 u 恒等于 j)。
-        // 保留这层线性插值:以后若把 BAR_N 调回 2x,偶数下标落在真实频段上、
-        // 奇数是两侧的线性中间值,天然不会超过邻段,也就不会造出假峰值。
-        uint8_t lv = 0;
-        if (bands) {
-            const int32_t u = (int32_t)j * (RADIO_VIZ_BANDS - 1) / (RADIO_VIZ_BAR_N - 1);
-            const int i0 = u;
-            const int i1 = (i0 + 1 < RADIO_VIZ_BANDS) ? i0 + 1 : i0;
-            const int frac = u - i0;
-            lv = (uint8_t)(bands[i0] + ((int)bands[i1] - (int)bands[i0]) * frac / 255);
-        }
-
-        int32_t hgt = (int32_t)((int)lv * v->max_h / 255);
-        if (hgt < MIN_BAR_H) hgt = MIN_BAR_H;
-        if (hgt > v->max_h) hgt = v->max_h;
-
-        // 宽度用创建时算好的 v->bar_w,不要 lv_obj_get_width() 读回:
-        // LVGL 9 在布局计算前读回是 0,会把条子宽度清成 0 直接消失。
-        lv_obj_set_size(v->bar[j], v->bar_w, hgt);
-        lv_obj_set_pos(v->bar[j], v->x0 + j * v->slot, v->baseline - hgt);
-        lv_obj_set_style_bg_color(v->bar[j], bar_color(lv), 0);
-    }
-
-    // 频谱底板随总电平微微发亮,音乐越大越"热"
-    lv_obj_set_style_bg_color(v->panel,
-        lv_color_make((uint8_t)(22 + level / 20), (uint8_t)(32 + level / 16),
-                      (uint8_t)(46 + level / 10)), 0);
+    // 柱阵/底板辉光是框架控件的事;分析是 APPFW_VIZ_BANDS 段,柱数不同
+    // 时控件内部线性插值(不造假峰)。
+    appfw_bars_update(&v->bars, bands, bands ? APPFW_VIZ_BANDS : 0, level);
 
     if (chrome) {
         if (chrome->app_name) lv_label_set_text(v->app_name, chrome->app_name);

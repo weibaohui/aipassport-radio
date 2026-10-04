@@ -20,9 +20,10 @@
 #include <stdbool.h>
 
 #include "lvgl.h"
-#include "radio_viz.h"     // RADIO_VIZ_BANDS
+#include "appfw_bars.h"
+#include "appfw_viz.h"     // APPFW_VIZ_BANDS
 
-// 显示用的柱子数。分析仍然是 RADIO_VIZ_BANDS(16)段对数分频,这里把每段
+// 显示用的柱子数。分析仍然是 APPFW_VIZ_BANDS(16)段对数分频,这里把每段
 // 线性插值成两根柱子 —— 16 根在 240px 宽的屏上太稀疏,看着像柱子阵而不是
 // 频谱。插值值不会超过两侧的均值,所以不会凭空造出假峰值。
 //
@@ -32,7 +33,7 @@
 // 播出断续残帧,听着像"颤抖"。每台机器的 DRAM 都要留给解码器,UI 这边
 // 让一步。16 根在 240px 宽下每根约 9px,视觉上仍然是密集柱阵。
 // 若将来要加回 32 根,先在真机日志里确认解码器初始化成功再提交。
-#define RADIO_VIZ_BAR_N RADIO_VIZ_BANDS
+#define RADIO_VIZ_BAR_N APPFW_VIZ_BANDS
 
 // 顶栏 + 副标题 + 状态行的文案。指针为 NULL 的项保持上一次不变。
 typedef struct {
@@ -60,8 +61,7 @@ typedef struct {
     lv_obj_t *station;     // 台名(大字)
     lv_obj_t *title;       // 曲名(灰色小字)
 
-    lv_obj_t *panel;       // 频谱底板
-    lv_obj_t *bar[RADIO_VIZ_BAR_N];
+    appfw_bars_t bars;     // 频谱柱阵(控件在框架:柱阵/色阶/辉光是机制)
 
     lv_obj_t *status;      // 播放状态 / 错误
     lv_obj_t *hint;        // 底部按键提示
@@ -69,14 +69,6 @@ typedef struct {
     // 屏幕尺寸。设备是 240x320,模拟器用同样尺寸,这样看到的就是真实效果。
     int32_t w;
     int32_t h;
-    // 布局常量,创建时算一次。这里**不能**用 lv_obj_get_width() 读回条子
-    // 宽度:LVGL 9 里对象在布局计算前读回几何是 0,会把宽度清成 0,条子
-    // 直接消失(踩过一次)。
-    int32_t baseline;      // 条子底边(柱子从这里往上长)
-    int32_t max_h;         // 最高的柱子有多高
-    int32_t slot;          // 每根柱子的横向步进
-    int32_t bar_w;         // 柱子宽度
-    int32_t x0;            // 第一根柱子的左边
 } radio_viz_view_t;
 
 // 创建播放页视图。font16/font24 由调用方提供(设备用应用自带字库,
@@ -84,7 +76,7 @@ typedef struct {
 lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
                                 const lv_font_t *font16, const lv_font_t *font24);
 
-// 更新。bands 长度 RADIO_VIZ_BANDS,level 0..255。
+// 更新。bands 长度 APPFW_VIZ_BANDS,level 0..255。
 // chrome 为 NULL 表示顶栏文案不变;其中单项为 NULL 同样保持不变。
 void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t level,
                            uint8_t volume, const radio_viz_chrome_t *chrome);

@@ -1,131 +1,149 @@
-# aipassport-radio 网络收音机
+<p align="right">
+  <strong>English</strong> · <a href="README.zh_CN.md">简体中文</a>
+</p>
 
-一台 AI 优先的网络收音机:ESP32-C3 + 1.77" 彩屏 + 扬声器,**用说话的方式控制**——
-局域网里的 AI(Claude、ZCode 等任何支持 MCP 的客户端)是它唯一的遥控器。
+# aipassport-radio Internet Radio
 
-没有网页后台,没有 App,没有云账号。开机、连网、把 AI 接进来,然后:
+An AI-first internet radio on the FoloToy AI Passport board (ESP32-C3,
+1.77" color display, speaker): **you control it by talking**. An AI assistant
+on your LAN (Claude, ZCode, or any MCP-capable client) is the only remote
+control it needs.
 
-> "放一个音乐台" · "换山东的" · "声音调到 30" · "暂停一下" · "随机来一个" ·
-> "把我常听的几个台导进去"
+No web admin, no app, no cloud account. Boot it, join your WiFi, plug the AI
+in — then just say:
 
-## 第一次使用
+> "Play some music" · "Something from Shandong" · "Volume 30" · "Pause" ·
+> "Random station" · "Import my usual stations"
 
-### 1. 配网(只需一次)
+## Getting started
 
-设备没保存过 WiFi 时,开机自动开放一个配网热点——手机连上它,浏览器会自动
-弹出配网页,选你家 WiFi、输密码,设备联网后配网页自动消失。
+### 1. Provision WiFi (once)
 
-以后换了 WiFi:对 AI 说"连接 XXX 热点"(需事先添加过),或"重新配网",
-或在屏幕上 进设置 → 配网。
+With no saved network the device opens a provisioning hotspot on boot. Join it
+from your phone and the captive portal pops up automatically; pick your WiFi,
+enter the password, and the portal disappears once the device is online.
 
-### 2. 把 AI 接进来
+Changed networks later: tell the AI "connect to hotspot XXX" (if saved), or
+use the on-device menu Settings → Provisioning.
 
-设备的 MCP 入口**常驻在线**(不随播放/闲置状态变化):
+### 2. Plug the AI in
+
+The device's MCP endpoint is **always on** (it does not depend on playback or
+idle state):
 
 ```
-http://<设备IP>:8080/mcp
+http://<device-ip>:8080/mcp
 ```
 
-在 AI 客户端里添加这个 MCP 服务,以 Claude 为例:
+Add it to any MCP client. Claude example:
 
 ```json
 { "mcpServers": { "radio": { "url": "http://192.168.31.252:8080/mcp" } } }
 ```
 
-**设备 IP 哪里看**:屏幕上 进 设置 → AI管理 / 设备信息 页,直接显示完整地址;
-或去路由器后台找。
+**Where to find the IP**: on the device, open Settings → AI admin / Device
+info — the full URL is on screen. Or check your router's client list.
 
-> ⚠️ MCP 端点没有鉴权,信任模型是"可信家庭局域网"。别把 8080 端口映射到公网。
+> ⚠️ The MCP endpoint has no authentication; the trust model is a trusted
+> home LAN. Do not expose port 8080 to the internet.
 
-### 3. 开始说话
+### 3. Start talking
 
-任何支持 MCP 的 AI 客户端连上后,它会看到 23 个工具(见下表)。你不需要记
-工具名,直接说人话,AI 自己挑:
+Any MCP client sees 23 tools (table below). You never need tool names — speak
+naturally and the AI picks:
 
-| 你说 | 它做 |
-|---|---|
-| "放一个音乐台" | 搜台名 → 点播 → 回报台号 |
-| "换山东的" | 搜"山东" → 列出候选 → 播放 |
-| "下一台 / 随机来一个" | play_next / play_random |
-| "暂停一下,等会继续" | pause(不出声但保持连接)→ resume |
-| "声音调到 30" | set_volume(关机重启也记住) |
-| "现在播的什么?" | get_state(台名+流地址+采样率) |
-| "把东营台加进去" | playlist_add_station(需要你给流地址) |
+| You say | It does |
+| --- | --- |
+| "Play some music" | searches station names, tunes in, reports back |
+| "Something from Shandong" | searches "Shandong", lists candidates, plays |
+| "Next / random" | play_next / play_random |
+| "Pause, resume later" | pause (silent but keeps the stream) → resume |
+| "Volume 30" | set_volume (persisted across reboots) |
+| "What's playing?" | get_state (station + stream URL + sample rate) |
+| "Add a Dongying station" | playlist_add_station (you provide the stream URL) |
 
-## 它肚子里有什么
+## What's inside
 
-- **345 个内置电台**,开机即有:全部经过"8 秒持续供流 + 码率 ≤130kbps"
-  实测筛选,存在固件里(不占运行内存),恢复出厂也删不掉。
-- **自定义电台 ≤100 台**:存设备本机 NVS,断电不丢。AI 单条加/删/改,
-  也可以让它"清空自定义,回到出厂台目"。
-- ** WiFi 多热点回退**:可以存多个热点,断线自动按序重连。
+- **345 built-in stations**, available at first boot: each one verified with
+  an 8-second continuous-stream test at ≤130 kbps. Stored in firmware rodata
+  (zero RAM) and immune to factory reset.
+- **Up to 100 custom stations** in on-device NVS, persistent across reboots.
+  The AI can add, modify (same name = new URL), remove, or clear them.
+- **Multi-AP WiFi fallback**: save several hotspots; the engine reconnects
+  and falls back in order.
 
-## 完整工具表(给 AI 和较真的人)
+## Tool reference (for AIs and the curious)
 
-播放(`play_*` 立即返回"已切台",连接要几秒,让 AI 随后用 `get_state` 确认):
+Playback (`play_*` returns "tuned" immediately; the connection settles in a
+few seconds — follow up with `get_state`):
 
-| 工具 | 参数 | 说明 |
-|---|---|---|
-| `play_index` | `index` | 按编号点播(1 起;1-6 是精选台) |
-| `play_name` | `name` | 按确切台名点播 |
-| `play_next` / `play_prev` | — | 下一台 / 上一台(首尾绕回) |
-| `play_random` | — | 随机一台,避开当前台 |
-| `pause` | — | 暂停:不出声但保持连接取流,恢复即接最新流 |
-| `resume` | — | 从暂停恢复;不在暂停态会被拒绝 |
-| `stop` | — | 停止播放,断开连接 |
-| `set_volume` | `level` 0-100 | 音量(存设备,重启保持) |
-| `get_state` | — | 台名/流地址/采样率/音量/错误原因 |
+| Tool | Args | Notes |
+| --- | --- | --- |
+| `play_index` | `index` | 1-based over the whole list (1-6 are featured) |
+| `play_name` | `name` | exact station name |
+| `play_next` / `play_prev` | — | next / previous (wraps around) |
+| `play_random` | — | random station, avoids the current one |
+| `pause` | — | pause: silent but keeps connection and stream; only while playing |
+| `resume` | — | resume from pause; refused otherwise |
+| `stop` | — | stop and disconnect |
+| `set_volume` | `level` 0-100 | persisted on device |
+| `get_state` | — | station / stream URL / sample rate / volume / error |
 
-发现与清单:
+Discovery and playlist:
 
-| 工具 | 参数 | 说明 |
-|---|---|---|
-| `search_stations` | `keyword`, `limit?` | 模糊搜台名 |
-| `list_stations` | `from?`, `count?` | 分页浏览全部电台 |
-| `playlist_add_station` | `name`, `url` | 加一台(http/https 直链);同名=改地址 |
-| `playlist_remove_station` | `index` | 删一台(内置台目不可删) |
-| `playlist_clear_custom` | — | 清空自定义台,回到内置台目 |
+| Tool | Args | Notes |
+| --- | --- | --- |
+| `search_stations` | `keyword`, `limit?` | fuzzy name search |
+| `list_stations` | `from?`, `count?` | paged browsing |
+| `playlist_add_station` | `name`, `url` | add (http/https direct link); same name = update URL |
+| `playlist_remove_station` | `index` | remove (built-in catalog is protected) |
+| `playlist_clear_custom` | — | clear all custom stations |
 
-WiFi 与设备:
+WiFi and device:
 
-| 工具 | 参数 | 说明 |
-|---|---|---|
-| `wifi_add_hotspot` | `ssid`, `password?`, `connect_now?` | 添加热点,可选立即连接 |
-| `wifi_list_saved` / `wifi_remove_hotspot` | — / `ssid` | 列出/删除已存热点 |
-| `wifi_status` | — | 连接状态与 IP |
-| `wifi_connect_saved` | `ssid` | 连一个已存热点 |
-| `get_device_info` | — | 固件版本/IP/空闲内存/运行时长 |
-| `get_provisioning_status` | — | 配网门户状态 |
-| `set_screen_off` | `seconds?` | 熄屏时间档位(无参数=查询当前值) |
+| Tool | Args | Notes |
+| --- | --- | --- |
+| `wifi_add_hotspot` | `ssid`, `password?`, `connect_now?` | add a hotspot, optionally connect now |
+| `wifi_list_saved` / `wifi_remove_hotspot` | — / `ssid` | list / remove saved hotspots |
+| `wifi_status` | — | connection state and IP |
+| `wifi_connect_saved` | `ssid` | connect to a saved hotspot |
+| `get_device_info` | — | firmware / IP / free heap / uptime |
+| `get_provisioning_status` | — | provisioning portal state |
+| `set_screen_off` | `seconds?` | screen-sleep timer (no arg = query; 0 = never) |
+| `set_brightness` | `percent?` | backlight level (no arg = query; 10-100, snapped to gears) |
 
-## 按键(给不用 AI 的时候)
+## Buttons (for the non-AI moments)
 
-| 页面 | 操作 | 动作 |
-|---|---|---|
-| 列表页(主页) | 上/下 | 移动光标 |
-| 列表页 | OK | 播放选中台;同台再按一次 = 停止 |
-| 列表页 | 双击 上/下 | 翻页(一页 5 行) |
-| 播放页 | 上/下 | 上一台/下一台 |
-| 播放页 | OK | 暂停 / 继续 |
-| 全局 | 长按 OK | 选台列表 |
-| 全局 | 长按 上 | 设置菜单 |
-| 全局 | 长按 下 | 音量页 |
+| Screen | Action | Result |
+| --- | --- | --- |
+| List (home) | up / down | move cursor |
+| List | OK | play selected; press again on the same station = stop |
+| List | double-click up/down | page turn (5 rows per page) |
+| Play | up / down | previous / next station |
+| Play | OK | pause / resume |
+| Global | long-press OK | station list |
+| Global | long-press up | settings menu |
+| Global | long-press down | volume page |
 
-## 常见问题
+## FAQ
 
-- **"XX 台播不出/响一声就断"**:网络电台是活的,会下线换址。播放器已内置
-  https 被掐自动换 http 重试;再不行就换一个台,或让 AI 搜同类台。
-- **"想要台名里没有的台"**:自己找流地址,让 AI `playlist_add_station` 加进
-  自定义清单(上限 100 台,收的是 http/https 直链)。
-- **"暂停和停止有什么区别"**:暂停保持连接(恢复快、直播不跳集),停止断开
-  省流量。睡觉挂停就 `stop`。
-- **"音量/电台重启后还在吗"**:都在,音量和自定义清单都存设备本机。
-- **"能摇一摇切台吗"**:不能,这块硬件没有陀螺仪/加速度计。
-- **"固件怎么升级"**:见 [DEVELOPING.md](DEVELOPING.md)(开发者文档)。
+- **"Station X won't play / dies after a beep"**: streams are alive — they go
+  offline and move. The player already retries via an http mirror when https
+  is cut; otherwise try another station or ask the AI for a similar one.
+- **"I want a station you don't have"**: find its stream URL and have the AI
+  `playlist_add_station` it (up to 100, http/https direct links only).
+- **"Pause vs stop?"**: pause keeps the connection (instant resume, no gap in
+  the live stream); stop disconnects and saves data. Overnight: `stop`.
+- **"Do volume and stations survive a reboot?"** Yes — both are on-device.
+- **"Shake to change station?"** No — this hardware has no gyroscope or
+  accelerometer.
+- **"How do I update the firmware?"** See the
+  [developer guide](/docs/development.md).
 
-## 开发者
+## For developers
 
-架构、构建、刷机、门禁、台目重生成等开发内容见
-[DEVELOPING.md](DEVELOPING.md)。固件基于自研框架
-[aipassport-fw](https://github.com/weibaohui/aipassport-fw)(submodule),
-播放器/收音机业务在本仓 `main/`。
+Architecture, build, flashing, gates, and catalog regeneration live in the
+[development guide](/docs/development.md). The firmware is built on our
+shared framework
+[aipassport-fw](https://github.com/weibaohui/aipassport-fw) (submodule);
+the radio application lives in `main/`.
