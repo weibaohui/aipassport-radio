@@ -511,14 +511,11 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
 {
     const int total = total_rows();
 
-    // 长按快捷键(列表/播放页都生效)。上千台时列表尾部的「设置」行根本
-    // 翻不到,所以列表里不再放设置行,固定:
-    //   长按上 = 设置菜单   长按下 = 音量页   长按 OK = 选台列表
+    // 长按动作表在框架配置里(lp_up=菜单 / lp_down=音量页,见 main.c),
+    // 上/下长按返回 DEFAULT 交给框架;应用只保留自管页面:长按 OK = 选台列表。
     if (ev == 3) {
-        if (btn == 0) return APPFW_KEY_MENU;               // 框架动作:进设置菜单
-        if (btn == 1) { appfw_ui_open_app_option(0); return APPFW_KEY_CONSUMED; }
         if (btn == 2) { s_page = PAGE_LIST; return APPFW_KEY_CONSUMED; }
-        return APPFW_KEY_CONSUMED;
+        return APPFW_KEY_DEFAULT;
     }
 
     switch (ev) {

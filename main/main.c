@@ -139,8 +139,11 @@ void app_main(void)
         // 音量交给框架设置菜单;主页按键全被 home_key 接管,默认入口关掉。
         .menu_opts = k_menu_opts,
         .menu_opts_count = 1,
-        // 收音机没有"周期拉数据"的概念,隐藏无意义的刷新周期项;其余保留。
-        .builtin_hide = APPFW_MENU_REFRESH,
+        // 内置菜单显式使能(默认全关):收音机要五项,刷新周期无意义不开。
+        .builtin_en = APPFW_MENU_ALL & ~APPFW_MENU_REFRESH,
+        // 主页长按动作表:上=设置菜单,下=音量页(长按 OK 留给应用自己)。
+        .lp_up = APPFW_LP_MENU,
+        .lp_down = APPFW_LP_APPOPT0,
         .menu_open_btn = 0xFF,
         .page_reset = radio_pages_page_reset,
     };
