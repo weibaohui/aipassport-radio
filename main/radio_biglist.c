@@ -13,6 +13,8 @@
 
 #include "radio_player.h"
 
+#include "radio_catalog.h"
+
 static const char *TAG = "radio_biglist";
 
 #define LINE_BUF_CAP   512   // 合并清单最长行 435B,留余量
@@ -37,8 +39,7 @@ static uint32_t s_prev_sz;          // 上一轮轻探到的文件大小(判断"
 static bool s_prev_valid;
 static bool s_borrowed;             // 本次挂载借了解码器预留的洞(要还)
 static int64_t s_last_read_us;      // 最近一次文件读(借洞 10s 无读即归还)
-static bool s_ever_avail;           // 大清单曾经就绪:模式粘住,临时读不到
-                                    // 也不掉回 NVS 小清单(恢复出厂才复位)
+static bool s_catalog_on = true;    // 目录模式:无 radio.m3u 时用内置台目兜底
 
 static void path_of(const char *name, char *out, size_t cap)
 {
@@ -247,11 +248,16 @@ bool radio_biglist_poll(void)
     const bool net_ready = (st.state == APPFW_NET_ONLINE ||
                             st.state == APPFW_NET_OFFLINE_RETRY ||
                             now >= 8LL * 1000000LL);
-    if (!net_ready) return false;
+    // net 门只挡 FAT 探测,不挡模式应答:目录模式不碰文件系统,开机第 1 秒
+    // 就该应答 345 台(否则头 8 秒显示 NVS 的 48 台,之后跳变——真机踩过)。
+    if (!s_avail && !net_ready) return s_catalog_on;
+    if (s_avail && !net_ready) return true;   // 文件模式:连接期报缓存
     // 无文件态整体 5s 一探(挂/卸 FAT 不便宜,别每秒折腾);就绪态不受限。
+    // 节流期内返回的是"模式是否可用"——目录模式兜底时恒真,probe 只是
+    // 为了发现将来上传的 radio.m3u。
     if (!s_avail && s_miss_check_us != INT64_MIN &&
         now - s_miss_check_us < 5LL * 1000000LL) {
-        return false;
+        return s_catalog_on;
     }
 
     fat_idle_check(now);
@@ -267,21 +273,19 @@ bool radio_biglist_poll(void)
         radio_player_snapshot(&ps);
         // 连接/播放/出错期间轮询只报缓存条数,绝不发起挂载——错误态内存
         // 最紧,此时挂载必失败还漏 WL 句柄;真正的读(用户翻列表)另有入口。
-        if (ps.state != RADIO_STOPPED) return s_ever_avail;
+        if (ps.state != RADIO_STOPPED) return s_avail || s_catalog_on;
     }
     if (!fm && fat_open()) fm = fopen(pm3u, "rb");
     if (!fm) {
-        // 没有大清单:别让 FAT(≈8KB)常驻占播放/TLS 的内存。粘住模式下
-        // 保留缓存条数(available 仍 true),设备显示不变;恢复出厂才会
-        // 经 discard() 把计数清零。
+        // 没有大清单(或上传中删了):落回内置台目。内容与文件一致时
+        // 用户无感;FAT 释放给播放/TLS。
         s_miss_check_us = now;
-        if (s_avail) ESP_LOGI(TAG, "radio.m3u 暂不可读");
+        if (s_avail) ESP_LOGI(TAG, "radio.m3u 不可用,落回内置台目");
         s_avail = false;
-        if (!s_ever_avail) s_count = 0;
         (void)appfw_files_unmount();
         if (s_borrowed) radio_player_reacquire_reserve();
         s_borrowed = false;
-        return false;
+        return s_catalog_on;
     }
     s_miss_check_us = INT64_MIN;
     long sz = -1;
@@ -316,24 +320,29 @@ bool radio_biglist_poll(void)
     s_m3u_size = (uint32_t)sz;
     s_count = n;
     s_avail = true;
-    s_ever_avail = true;
-    ESP_LOGI(TAG, "大清单就绪:%u 台(%ld 字节)", (unsigned)n, sz);
+    ESP_LOGI(TAG, "文件清单就绪:%u 台(%ld 字节)", (unsigned)n, sz);
     return true;
 }
 
-// 粘住:曾经就绪就永远算大清单模式。临时读不到(FAT 被解码器挤掉、
-// 上传中)返回 true + 缓存条数,绝不静默掉回 48 台出厂清单——那是用户
-// 误以为"清单丢了"的根源。恢复出厂经 discard() 复位。
-bool radio_biglist_available(void) { return s_ever_avail; }
+// 目录模式兜底:文件模式(radio.m3u)优先,没有文件就用内置台目——
+// available 恒真,设备永远处于"大清单模式",NVS 48 台小清单彻底休眠。
+bool radio_biglist_available(void) { return s_avail || s_catalog_on; }
 
 int radio_biglist_count(void)
 {
-    return (s_avail || s_ever_avail) ? (int)s_count : 0;
+    if (s_avail) return (int)s_count;
+    return s_catalog_on ? RADIO_CATALOG_N : 0;
 }
 
 bool radio_biglist_get(int idx, radio_station_t *out)
 {
-    if (!out || idx < 0 || idx >= (int)s_count || !fat_open()) return false;
+    if (!out) return false;
+    if (!s_avail) {                       // 目录模式:纯 rodata 读,零 IO
+        if (!s_catalog_on || idx < 0 || idx >= RADIO_CATALOG_N) return false;
+        *out = RADIO_CATALOG[idx];
+        return true;
+    }
+    if (idx < 0 || idx >= (int)s_count || !fat_open()) return false;
     s_last_read_us = esp_timer_get_time();
     char pidx[96], pm3u[96];
     idx_path(pidx, sizeof(pidx));
@@ -375,7 +384,15 @@ bool radio_biglist_get(int idx, radio_station_t *out)
 
 int radio_biglist_find(const char *name)
 {
-    if (!name || !name[0] || !fat_open()) return -1;
+    if (!name || !name[0]) return -1;
+    if (!s_avail) {                       // 目录模式:rodata 线性扫,毫秒级
+        if (!s_catalog_on) return -1;
+        for (int i = 0; i < RADIO_CATALOG_N; i++) {
+            if (strcmp(RADIO_CATALOG[i].name, name) == 0) return i;
+        }
+        return -1;
+    }
+    if (!fat_open()) return -1;
     s_last_read_us = esp_timer_get_time();
     char pm3u[96];
     m3u_path(pm3u, sizeof(pm3u));
@@ -423,8 +440,7 @@ void radio_biglist_discard(void)
     s_avail = false;
     s_count = 0;
     s_m3u_size = 0;
-    s_ever_avail = false;              // 恢复出厂:真正退回小清单
-    s_miss_check_us = INT64_MIN;
+    s_miss_check_us = INT64_MIN;       // 恢复出厂:落回内置台目(available 恒真)
     (void)appfw_files_unmount();
     ESP_LOGI(TAG, "大清单已删除,退回小清单");
 }
@@ -432,4 +448,10 @@ void radio_biglist_discard(void)
 void radio_biglist_set_dir(const char *dir)
 {
     snprintf(s_dir, sizeof(s_dir), "%s", dir ? dir : "/files");
+}
+
+// 仅测试用:关掉目录模式后,无文件即真正"不可用"(radio_store 走 NVS 路径)。
+void radio_biglist_set_catalog_enabled(bool enabled)
+{
+    s_catalog_on = enabled;
 }

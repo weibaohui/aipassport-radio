@@ -5,6 +5,7 @@
 // URL 忽略)、偏移在长行/空行/CRLF 下仍然对得上、get 按需读单条、find 线性
 // 找名、换文件自动重建、索引损坏自愈、discard 删文件退回、UTF-8 安全截断。
 #include "radio_biglist.h"
+#include "radio_catalog.h"
 #include "radio_player.h"
 
 #include <assert.h>
@@ -72,13 +73,26 @@ static bool file_exists(const char *name)
 static void case_no_file(void)
 {
     make_dir();
+    // 无文件 = 内置台目兜底:仍是"大清单模式",条数/读取全走 rodata。
+    assert(ready());
+    assert(radio_biglist_available());
+    assert(radio_biglist_count() == RADIO_CATALOG_N);
+    radio_station_t st;
+    assert(radio_biglist_get(0, &st));
+    assert(st.name[0] != '\0' && st.url[0] != '\0');
+    assert(!radio_biglist_get(RADIO_CATALOG_N, &st));
+    assert(radio_biglist_find(RADIO_CATALOG[3].name) == 3);
+    assert(radio_biglist_find("不存在的台") == -1);
+    printf("ok  无文件落内置台目(%d 台)\n", RADIO_CATALOG_N);
+
+    // 关掉台目(测试钩子):无文件才是真正"不可用",NVS 小清单路径由此接管。
+    radio_biglist_set_catalog_enabled(false);
     assert(ready() == false);
     assert(!radio_biglist_available());
     assert(radio_biglist_count() == 0);
-    radio_station_t st;
     assert(!radio_biglist_get(0, &st));
-    assert(radio_biglist_find("任意") == -1);
-    printf("ok  无文件不可用\n");
+    radio_biglist_set_catalog_enabled(true);
+    printf("ok  关台目后无文件不可用\n");
 }
 
 static void case_basic_parse(void)
@@ -213,6 +227,21 @@ static void case_utf8_truncation(void)
     printf("ok  UTF-8 安全截断\n");
 }
 
+static void case_file_gone_falls_back(void)
+{
+    make_dir();
+    write_m3u("#EXTINF:-1,甲台\nhttp://a.example/1\n");
+    assert(ready());
+    assert(radio_biglist_count() == 1);
+    char p[160];
+    snprintf(p, sizeof(p), "%s/radio.m3u", g_dir);
+    assert(remove(p) == 0);
+    radio_biglist_init();                       // 模拟重启
+    assert(ready());
+    assert(radio_biglist_count() == RADIO_CATALOG_N);   // 落回台目
+    printf("ok  文件消失落回台目\n");
+}
+
 static void case_discard(void)
 {
     make_dir();
@@ -220,11 +249,11 @@ static void case_discard(void)
     assert(ready());
     assert(radio_biglist_available());
     radio_biglist_discard();
-    assert(!radio_biglist_available());
-    assert(radio_biglist_count() == 0);
+    assert(radio_biglist_available());          // 落回内置台目
+    assert(radio_biglist_count() == RADIO_CATALOG_N);
     assert(!file_exists("radio.m3u"));
     assert(!file_exists("radio.idx"));
-    printf("ok  discard 删文件退回\n");
+    printf("ok  discard 删文件落回台目\n");
 }
 
 int main(void)
@@ -234,6 +263,7 @@ int main(void)
     case_offsets_with_long_lines();
     case_reindex_on_change();
     case_utf8_truncation();
+    case_file_gone_falls_back();
     case_discard();
     printf("全部通过\n");
     return 0;

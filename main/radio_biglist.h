@@ -41,9 +41,13 @@ bool radio_biglist_get(int idx, radio_station_t *out);
 // 播放下标缓存)。未找到 -1。
 int radio_biglist_find(const char *name);
 
-// 恢复出厂:删除 m3u 与索引并复位状态(之后 poll 不可用,radio_store 退回
-// NVS 小清单并物化出厂清单)。
+// 恢复出厂:删除 m3u 与索引并复位状态(之后落回内置台目,见下)。
 void radio_biglist_discard(void);
+
+// 内置台目:无 radio.m3u 时的兜底清单(flash rodata,339 台,零 RAM)。
+// available()/count()/get()/find() 在无文件时自动落到台目,设备恒处
+// "大清单模式";NVS 小清单路径只在测试里关闭台目后才会走到。
+void radio_biglist_set_catalog_enabled(bool enabled);   // 仅测试用
 
 // 仅测试用:改写 m3u/idx 所在目录(默认 /files),主机测试指到临时目录。
 void radio_biglist_set_dir(const char *dir);

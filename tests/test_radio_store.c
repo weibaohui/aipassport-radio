@@ -4,6 +4,7 @@
 // 桩)钉死这些行为:出厂物化、旧版 M3U 迁移、同名改址、拒删内置台、删除后
 // 前移、整表导入、恢复出厂、以及"重启"(重复 init)不重置用户清单。
 #include "radio_store.h"
+#include "radio_biglist.h"
 #include "appfw_storage.h"
 #include "radio_m3u.h"
 #include "radio_m3u_default.h"
@@ -119,6 +120,10 @@ static void collect_factory(void *user, const char *name, const char *url)
 
 int main(void)
 {
+    // 关掉内置台目兜底:本文件测的是 NVS 小清单路径(台目开着时 store
+    // 永远委托台目,这些路径摸不到)。
+    radio_biglist_set_catalog_enabled(false);
+
     // 解析出厂清单作为期望值(与 store 同款筛选),再按 store 同款合并语义
     // (同名覆盖、首现位置)折叠——出厂清单里有重名台,合并后台数 < 解析条数。
     radio_m3u_stats_t st = { 0 };
