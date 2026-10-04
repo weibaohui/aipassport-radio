@@ -140,10 +140,10 @@ void app_main(void)
         .menu_opts = k_menu_opts,
         .menu_opts_count = 1,
         // 内置菜单显式使能(默认全关):收音机要五项,刷新周期无意义不开。
-        .builtin_en = APPFW_MENU_ALL & ~APPFW_MENU_REFRESH,
+        .menu_show_mask = APPFW_MENU_ITEM_ALL & ~APPFW_MENU_ITEM_REFRESH_PERIOD,
         // 主页长按动作表:上=设置菜单,下=音量页(长按 OK 留给应用自己)。
-        .lp_up = APPFW_LP_MENU,
-        .lp_down = APPFW_LP_APPOPT0,
+        .long_press_up = APPFW_LONG_PRESS_OPEN_MENU,
+        .long_press_down = APPFW_LONG_PRESS_OPEN_APP_OPTION_1,
         .menu_open_btn = 0xFF,
         .page_reset = radio_pages_page_reset,
     };
