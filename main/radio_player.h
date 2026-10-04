@@ -69,6 +69,11 @@ uint8_t radio_player_level(void);
 // 暂停/继续(播放页 OK)。暂停 = 保持连接但丢弃音频,恢复即接最新流。
 void radio_player_toggle_pause(void);
 
+// 显式暂停/恢复(MCP 用):pause 只在播放中生效(保持连接,取流不断);
+// resume 只在暂停态生效,无可恢复返回 false——调用方据此拒绝执行。
+void radio_player_pause(void);
+bool radio_player_resume(void);
+
 // 开机尽早调用:预留大块连续内存给播放管线(防堆碎片)。
 void radio_player_reserve(void);
 

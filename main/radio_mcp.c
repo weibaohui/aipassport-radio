@@ -141,6 +141,33 @@ static int tool_stop(cJSON *args, appfw_mcp_resp_t *resp)
     return 0;
 }
 
+static int tool_pause(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    if (s.state != RADIO_PLAYING) {
+        appfw_mcp_resp_addf(resp, "没有正在播放的电台,无需暂停");
+        return 1;
+    }
+    radio_player_pause();
+    appfw_mcp_resp_addf(resp, "已暂停(连接保持,取流不断;用 resume 恢复)");
+    return 0;
+}
+
+static int tool_resume(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    if (!radio_player_resume()) {
+        appfw_mcp_resp_addf(resp, "没有可恢复的播放(不在暂停态)");
+        return 1;
+    }
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    appfw_mcp_resp_addf(resp, "已恢复:%s", s.station);
+    return 0;
+}
+
 static int tool_volume(cJSON *args, appfw_mcp_resp_t *resp)
 {
     const cJSON *lv = cJSON_GetObjectItemCaseSensitive(args, "level");
@@ -374,7 +401,12 @@ static const appfw_mcp_tool_t TOOLS[] = {
     { "list_stations", "分页列出电台(内置在前)",
       "{\"type\":\"object\",\"properties\":{\"from\":{\"type\":\"integer\"},\"count\":{\"type\":\"integer\"}}}",
       tool_list },
-    { "stop", "停止播放", "{}", tool_stop },
+    { "stop", "停止播放(断开连接;区别于 pause 的保持连接)",
+      "{}", tool_stop },
+    { "pause", "暂停播放:保持连接与取流,不出声;只在正在播放时执行",
+      "{}", tool_pause },
+    { "resume", "从暂停恢复播放;不在暂停态则不执行(返回失败)",
+      "{}", tool_resume },
     { "set_volume", "设置音量 0-100(存 NVS,重启保持)",
       "{\"type\":\"object\",\"properties\":{\"level\":{\"type\":\"integer\"}},\"required\":[\"level\"]}",
       tool_volume },

@@ -815,6 +815,21 @@ uint8_t radio_player_level(void) { return s_lvl; }
 // 开机尽早调用:预留一块大连续内存给播放管线(解码器/环桶/PCM)。
 void radio_player_reserve(void);
 
+void radio_player_pause(void)
+{
+    if (s_snap.state != RADIO_PLAYING) return;
+    s_paused = true;
+    set_snap(RADIO_PAUSED, RADIO_ERR_NONE);
+}
+
+bool radio_player_resume(void)
+{
+    if (s_snap.state != RADIO_PAUSED) return false;
+    s_paused = false;
+    set_snap(RADIO_PLAYING, RADIO_ERR_NONE);
+    return true;
+}
+
 void radio_player_toggle_pause(void)
 {
     if (s_snap.state != RADIO_PLAYING && s_snap.state != RADIO_PAUSED) return;
