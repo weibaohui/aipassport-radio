@@ -20,7 +20,6 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev);
 int radio_pages_info_rows(char (*keys)[16], char (*vals)[72], int max);
 
 // 门户:应用配置卡片 HTML。
-const char *radio_pages_app_config_html(void);
 // 门户:导入/保存时写回用户自加电台。
 bool radio_pages_app_config_apply(void *cjson_root);
 // 门户:状态/导出回显。

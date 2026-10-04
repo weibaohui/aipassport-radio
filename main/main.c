@@ -25,6 +25,7 @@
 #include "freertos/task.h"
 
 #include "radio_pages.h"
+#include "radio_mcp.h"
 #include "radio_player.h"
 
 static const char *TAG = "main";
@@ -110,6 +111,8 @@ void app_main(void)
     if (net_err != 0) {
         ESP_LOGW(TAG, "WiFi 初始化返回 %d", net_err);
     }
+    radio_mcp_init();             // MCP 工具表:AI 经门户 /mcp 操作设备
+
     // 载入电台列表(要在建页之前)。大清单模式下第一次 count 会"借洞"挂载
     // files 分区 FAT 建索引,空闲 10s 后自动卸载把预留补回。
     radio_pages_init();
@@ -133,7 +136,6 @@ void app_main(void)
         .home_poll  = radio_pages_home_poll,
         .home_key   = radio_pages_home_key,
         .info_rows  = radio_pages_info_rows,
-        .app_config_html  = radio_pages_app_config_html,
         .app_config_apply = radio_pages_app_config_apply,
         .app_config_fill  = radio_pages_app_config_fill,
         // 音量交给框架设置菜单;主页按键全被 home_key 接管,默认入口关掉。
@@ -167,7 +169,6 @@ void app_main(void)
     }
 
     const appfw_prov_cfg_t pcfg = {
-        .app_config_html  = radio_pages_app_config_html,
         .app_config_apply = radio_pages_app_config_apply,
         .app_config_fill  = radio_pages_app_config_fill,
         .on_httpd_ready   = portal_ready,
