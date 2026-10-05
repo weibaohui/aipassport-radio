@@ -225,6 +225,10 @@ static const uint8_t K_ENV[8][APPFW_VIZ_BANDS] = {
 
 static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
 {
+    // GCC 误报压制:chrome 缓冲的指针逃逸进 s_chrome(供 LVGL 异步读),
+    // 跨调用分析推不出数组界,把合法写入报成 stringop-overflow。
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
     snprintf(s_ch_buf[0], sizeof(s_ch_buf[0]), "RADIO");
 
     // 时间:和框架一样,没对时就显示 --:--,免得给出 1970 误导。
@@ -276,6 +280,7 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
              s->station[0] ? s->station : "—");
 
     snprintf(s_ch_buf[6], sizeof(s_ch_buf[6]), "%s", state_text(s));
+#pragma GCC diagnostic pop
 
     s_chrome.app_name    = s_ch_buf[0];
     s_chrome.clock       = s_ch_buf[1];
