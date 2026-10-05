@@ -268,20 +268,12 @@ static void viz_feed(const int16_t *pcm, size_t bytes, uint32_t rate)
     s_viz_level = appfw_viz_level(&s_viz);
 }
 
-// ---- 响度均衡(智能维持) ----
+// ---- 响度均衡(智能音量):恒开。慢速 AGC 拉平台与台之间的响度差。 ----
 static appfw_loudness_t s_loud;
-static bool s_loud_on = true;        // 默认开;设置菜单「智能维持」持久化
-
-void radio_player_set_loudness(bool on)
-{
-    s_loud_on = on;
-    ESP_LOGI(TAG, "响度均衡:%s", on ? "开" : "关");
-}
 
 // 解码输出统一过这里再进 I2S。增益变化每 5 秒记一条日志,给真机调参看曲线。
 static void loudness_apply(int16_t *pcm, size_t bytes)
 {
-    if (!s_loud_on) return;
     appfw_loudness_process(&s_loud, pcm, bytes);
     static uint32_t blocks;
     if (++blocks >= 50) {            // ≈5s

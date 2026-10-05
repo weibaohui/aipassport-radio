@@ -59,11 +59,6 @@ static void apply_volume(uint16_t percent)
     radio_set_volume((uint8_t)percent);
 }
 
-static void apply_loudness(uint16_t v)
-{
-    radio_player_set_loudness(v != 0);
-}
-
 static void apply_effect(uint16_t v)
 {
     radio_pages_set_effect((uint8_t)v);
@@ -115,9 +110,6 @@ void app_main(void)
     uint16_t vol = 55;
     appfw_store_get_u16("opt_volume", &vol, 55);
     radio_set_volume((uint8_t)vol);
-    uint16_t ln = 1;
-    appfw_store_get_u16("opt_loudness", &ln, 1);
-    radio_player_set_loudness(ln != 0);
     uint16_t fx = 0;
     appfw_store_get_u16("opt_effect", &fx, 0);
     radio_pages_set_effect((uint8_t)fx);
@@ -144,19 +136,12 @@ void app_main(void)
     // 音量与响度均衡进框架设置菜单(应用选项页):选中即存 NVS 并生效。
     static const uint16_t k_vol_opts[] = { 0, 20, 40, 60, 80, 100 };
     static const char *const k_vol_lbls[] = { "0%", "20%", "40%", "60%", "80%", "100%" };
-    static const uint16_t k_ln_opts[] = { 0, 1 };
-    static const char *const k_ln_lbls[] = { "关", "开" };
     static const uint16_t k_fx_opts[] = { 0, 1, 2 };
     static const char *const k_fx_lbls[] = { "经典频谱", "LED 电平表", "对称频谱" };
     static const appfw_menu_opt_t k_menu_opts[] = { {
         .key = "opt_volume", .label = "音量", .symbol = LV_SYMBOL_VOLUME_MID,
         .opts = k_vol_opts, .lbls = k_vol_lbls, .count = 6,
         .on_change = apply_volume,
-    }, {
-        // 智能维持 = 响度均衡:自动拉平台与台之间的响度差(慢速 AGC)。
-        .key = "opt_loudness", .label = "智能维持", .symbol = LV_SYMBOL_CHARGE,
-        .opts = k_ln_opts, .lbls = k_ln_lbls, .count = 2,
-        .on_change = apply_loudness,
     }, {
         // 动态效果:播放页律动面板三选一。
         .key = "opt_effect", .label = "动态效果", .symbol = LV_SYMBOL_SETTINGS,
@@ -174,7 +159,7 @@ void app_main(void)
         .app_config_fill  = radio_pages_app_config_fill,
         // 音量交给框架设置菜单;主页按键全被 home_key 接管,默认入口关掉。
         .menu_opts = k_menu_opts,
-        .menu_opts_count = 3,
+        .menu_opts_count = 2,
         // 内置菜单显式使能(默认全关):收音机要五项,刷新周期无意义不开。
         .menu_show_mask = APP_MENU_SHOW_MASK,
         // 主页长按动作表:上=设置菜单,下=音量页(长按 OK 留给应用自己)。

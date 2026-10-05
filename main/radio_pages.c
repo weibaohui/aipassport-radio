@@ -14,6 +14,7 @@
 #include "appfw_portal.h"
 #include "appfw_storage.h"
 #include "bsp_audio.h"
+#include "bsp_display.h"
 #include "bsp_battery.h"
 #include "cJSON.h"
 #include "esp_http_server.h"
@@ -405,8 +406,17 @@ static void fx_apply(uint8_t v)
 void radio_pages_set_effect(uint8_t v)
 {
     if (v > 2) v = 2;
-    if (v == s_effect) return;
+    if (v == s_effect && s_fx_led[0] == NULL && s_fx_sym[0] == NULL && v == 0) return;
+    s_effect = v;
+    if (!s_play || !s_play_layer) {
+        // 播放页还没建(开机读回/页面重建中):只记档位,home_build 末尾统一应用
+        ESP_LOGI(TAG, "动态效果待应用:%u", (unsigned)v);
+        return;
+    }
+    // on_change 跑在锁外上下文,对象操作必须自己持 LVGL 锁
+    if (!bsp_lvgl_lock(500)) return;
     fx_apply(v);
+    bsp_lvgl_unlock();
     ESP_LOGI(TAG, "动态效果:%s", v == 0 ? "经典频谱" : v == 1 ? "LED 电平表" : "对称频谱");
 }
 
@@ -529,6 +539,7 @@ void radio_pages_home_build(lv_obj_t *page)
         ESP_LOGE(TAG, "播放页创建失败");
     } else {
         s_viz_timer = lv_timer_create(viz_timer_cb, VIZ_PERIOD_MS, NULL);
+        fx_apply(s_effect);          // 按当前档位建效果对象(开机/页面重建统一入口)
     }
 
     s_page = PAGE_LIST;
