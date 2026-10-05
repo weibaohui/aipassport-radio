@@ -41,8 +41,8 @@ Add it to any MCP client. Claude example:
 { "mcpServers": { "radio": { "url": "http://192.168.31.252:8080/mcp" } } }
 ```
 
-**Where to find the IP**: on the device, open Settings → AI admin / Device
-info — the full URL is on screen. Or check your router's client list.
+**Where to find the IP**: on the device, open Settings → Device info — the
+"AI address" row is the full URL. Or check your router's client list.
 
 > ⚠️ The MCP endpoint has no authentication; the trust model is a trusted
 > home LAN. Do not expose port 8080 to the internet.
@@ -69,6 +69,12 @@ naturally and the AI picks:
   (zero RAM) and immune to factory reset.
 - **Up to 100 custom stations** in on-device NVS, persistent across reboots.
   The AI can add, modify (same name = new URL), remove, or clear them.
+- **Smart volume (always on)**: stations broadcast at different loudness —
+  the device levels them automatically, so one volume setting sounds
+  consistent across stations (slow leveling, no pumping).
+- **Three play animations**: pick in Settings → Effect — classic spectrum /
+  LED level meter / symmetric spectrum, all with flowing rainbow colors.
+- **Adjustable backlight**: Settings → Brightness, five gears, persisted.
 - **Multi-AP WiFi fallback**: save several hotspots; the engine reconnects
   and falls back in order.
 
@@ -107,13 +113,13 @@ WiFi and device:
 | `wifi_list_saved` / `wifi_remove_hotspot` | — / `ssid` | list / remove saved hotspots |
 | `wifi_status` | — | connection state and IP |
 | `wifi_connect_saved` | `ssid` | connect to a saved hotspot |
-| `get_device_info` | — | firmware / IP / free heap / uptime |
+| `set_brightness` | `percent?` | backlight level (no arg = query; 10-100, gear-snapped) |
+| `get_device_info` | — | framework/app versions / IP / memory panorama / uptime |
 | `get_provisioning_status` | — | provisioning portal state |
 | `get_recent_logs` | `count?` | recent on-device logs (ring buffer, chronological) |
 | `set_log_level` | `tag?`, `level` | adjust log level (esp_log) |
 | `set_netlog` | `on`, `ip?`, `port?` | UDP syslog push; receiver: `nc -kul 5514` |
 | `set_screen_off` | `seconds?` | screen-sleep timer (no arg = query; 0 = never) |
-| `set_brightness` | `percent?` | backlight level (no arg = query; 10-100, snapped to gears) |
 
 ## Buttons (for the non-AI moments)
 
@@ -137,7 +143,10 @@ WiFi and device:
   `playlist_add_station` it (up to 100, http/https direct links only).
 - **"Pause vs stop?"**: pause keeps the connection (instant resume, no gap in
   the live stream); stop disconnects and saves data. Overnight: `stop`.
-- **"Do volume and stations survive a reboot?"** Yes — both are on-device.
+- **"Do volume, stations and brightness survive a reboot?"** Yes — all
+  on-device (volume, custom stations, brightness, effect choice).
+- **"Stations sound louder/quieter than each other"** — smart volume levels
+  them automatically; give it a few seconds after switching.
 - **"Shake to change station?"** No — this hardware has no gyroscope or
   accelerometer.
 - **"How do I update the firmware?"** See the

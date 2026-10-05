@@ -194,6 +194,26 @@ int main(void)
     radio_store_init();                                       // 再启动:不重复迁移
     assert(radio_store_count() == base);
 
-    printf("test_radio_store: PASS (%d 用例组, 台目 %d 台)\n", 10, base);
+    // ---- 11. 收藏:加/幂等/查/删/重启保持;按台名,台目与自定义通用 ----
+    fake_store_reset();
+    radio_store_init();
+    assert(radio_store_fav_count() == 0);
+    assert(radio_store_fav_add("测试台A"));
+    assert(radio_store_fav_add("测试台A"));               // 幂等
+    assert(radio_store_fav_count() == 1);
+    assert(radio_store_fav_has("测试台A"));
+    assert(radio_store_fav_add(RADIO_CATALOG[5].name));   // 台目也可收藏
+    assert(radio_store_fav_count() == 2);
+    char favname[RADIO_NAME_MAX];
+    assert(radio_store_fav_get(0, favname, sizeof(favname)));
+    assert(strcmp(favname, "测试台A") == 0);
+    assert(radio_store_fav_remove("测试台A"));
+    assert(!radio_store_fav_remove("测试台A"));           // 不存在=false
+    assert(radio_store_fav_count() == 1);
+    radio_store_init();                                    // 重启保持
+    assert(radio_store_fav_count() == 1);
+    assert(radio_store_fav_has(RADIO_CATALOG[5].name));
+
+    printf("test_radio_store: PASS (%d 用例组, 台目 %d 台)\n", 11, base);
     return 0;
 }

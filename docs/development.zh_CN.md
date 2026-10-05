@@ -69,6 +69,9 @@ components/framework/       框架 aipassport-fw(submodule,业务无关)
   appfw_mcp.c / _srv.c      MCP 协议核 + 常驻极简 TCP 服务(8080)
   appfw_portal.c            captive 配网门户(仅配网期存在,空闲自卸)
   appfw_net/netlist/storage UI 骨架、WiFi 引擎(多热点回退)、NVS 封装
+  appfw_loudness.c          响度均衡(智能音量,慢速 AGC)
+  appfw_viz.c / bars.c      频谱分析 / 柱阵控件
+  appfw_netlog.c            网络日志(环形缓冲 + UDP syslog)
   appfw_stream/hls/icy      通用流管线(HLS/ICY 元数据/重定向/https 回退)
 ```
 

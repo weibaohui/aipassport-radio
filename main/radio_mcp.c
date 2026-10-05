@@ -382,6 +382,66 @@ static int tool_wifi_remove(cJSON *args, appfw_mcp_resp_t *resp)
     return 1;
 }
 
+// ---- 收藏(按台名;缺省操作当前播放台) ----
+static int tool_favorite_add(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    const cJSON *nm = cJSON_GetObjectItemCaseSensitive(args, "name");
+    const char *name = (cJSON_IsString(nm) && nm->valuestring[0])
+                           ? nm->valuestring : NULL;
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    if (!name) name = s.station;                    // 缺省 = 当前播放台
+    if (!name[0]) {
+        appfw_mcp_resp_addf(resp, "参数 name(string)缺失,且当前没有播放中的台");
+        return 1;
+    }
+    if (!radio_store_fav_add(name)) {
+        appfw_mcp_resp_addf(resp, "收藏失败:清单已满(上限 50)");
+        return 1;
+    }
+    appfw_mcp_resp_addf(resp, "已收藏 %s(共 %d 个收藏)", name,
+                        radio_store_fav_count());
+    return 0;
+}
+
+static int tool_favorite_remove(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    const cJSON *nm = cJSON_GetObjectItemCaseSensitive(args, "name");
+    const char *name = (cJSON_IsString(nm) && nm->valuestring[0])
+                           ? nm->valuestring : NULL;
+    radio_player_snap_t s;
+    radio_player_snapshot(&s);
+    if (!name) name = s.station;
+    if (!name[0]) {
+        appfw_mcp_resp_addf(resp, "参数 name(string)缺失,且当前没有播放中的台");
+        return 1;
+    }
+    if (!radio_store_fav_remove(name)) {
+        appfw_mcp_resp_addf(resp, "%s 不在收藏里", name);
+        return 1;
+    }
+    appfw_mcp_resp_addf(resp, "已取消收藏 %s(剩 %d 个)", name,
+                        radio_store_fav_count());
+    return 0;
+}
+
+static int tool_list_favorites(cJSON *args, appfw_mcp_resp_t *resp)
+{
+    (void)args;
+    const int n = radio_store_fav_count();
+    if (n == 0) {
+        appfw_mcp_resp_addf(resp, "还没有收藏;说\"收藏这个台\"即可加入");
+        return 0;
+    }
+    appfw_mcp_resp_addf(resp, "收藏 %d 台:", n);
+    char name[RADIO_NAME_MAX];
+    for (int i = 0; i < n && i < 25; i++) {
+        if (!radio_store_fav_get(i, name, sizeof(name))) continue;
+        appfw_mcp_resp_addf(resp, "\n%d. %s", i + 1, name);
+    }
+    return 0;
+}
+
 static const appfw_mcp_tool_t TOOLS[] = {
     { "play_index", "按下标播放电台(1 起的全清单编号,1-6 是内置精品台;编号用 search_stations/list_stations 查)",
       "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}",
@@ -420,6 +480,14 @@ static const appfw_mcp_tool_t TOOLS[] = {
       tool_remove_station },
     { "playlist_clear_custom", "清空全部自定义电台,回到内置台目(慎用)",
       "{}", tool_clear_custom },
+    { "favorite_add", "收藏一台(台名缺省=当前播放的台)",
+      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}",
+      tool_favorite_add },
+    { "favorite_remove", "取消收藏(台名缺省=当前播放的台)",
+      "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"}}}",
+      tool_favorite_remove },
+    { "list_favorites", "列出全部收藏的电台",
+      "{}", tool_list_favorites },
     { "wifi_add_hotspot", "添加新热点(名称+密码);connect_now=true 立即连接",
       "{\"type\":\"object\",\"properties\":{\"ssid\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"connect_now\":{\"type\":\"boolean\"}},\"required\":[\"ssid\"]}",
       tool_wifi_add },

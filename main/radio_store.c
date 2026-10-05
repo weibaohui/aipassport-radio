@@ -15,8 +15,82 @@ static const char *TAG = "radio_store";
 #define USER_REC_CAP  (RADIO_NAME_MAX + RADIO_URL_MAX + 2)  // "名\tURL" + NUL
 #define LEGACY_CNT_KEY "r_cnt"      // 旧版清单计数键(内容全是台目副本,清空)
 #define LEGACY_MAX     48           // 旧版上限(r0..r47)
+#define FAV_CNT_KEY    "fav_cnt"    // 收藏台数(u16)
+#define FAV_MAX        50           // 收藏上限(f0..f49,存台名)
 
 static uint8_t s_user_n;            // RAM 里唯一常驻的清单状态
+static uint8_t s_fav_n;             // 收藏台数(RAM 缓存,写透 NVS)
+
+// ---- 收藏 ----
+
+static void fav_key(int idx, char *key, size_t cap)
+{
+    snprintf(key, cap, "f%d", idx);
+}
+
+int radio_store_fav_count(void) { return (int)s_fav_n; }
+
+bool radio_store_fav_has(const char *name)
+{
+    if (!name || !name[0]) return false;
+    char key[8], rec[RADIO_NAME_MAX];
+    for (int i = 0; i < (int)s_fav_n; i++) {
+        fav_key(i, key, sizeof(key));
+        if (appfw_store_get_str(key, rec, sizeof(rec)) && strcmp(rec, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool radio_store_fav_add(const char *name)
+{
+    if (!name || !name[0] || strlen(name) >= RADIO_NAME_MAX) return false;
+    if (radio_store_fav_has(name)) return true;              // 幂等
+    if (s_fav_n >= FAV_MAX) return false;
+    char key[8];
+    fav_key(s_fav_n, key, sizeof(key));
+    if (!appfw_store_set_str(key, name)) return false;       // NVS 满:干净报错
+    s_fav_n++;
+    (void)appfw_store_set_u16(FAV_CNT_KEY, s_fav_n);
+    return true;
+}
+
+bool radio_store_fav_remove(const char *name)
+{
+    if (!name || !name[0]) return false;
+    char key[8], rec[RADIO_NAME_MAX];
+    int at = -1;
+    for (int i = 0; i < (int)s_fav_n; i++) {
+        fav_key(i, key, sizeof(key));
+        if (appfw_store_get_str(key, rec, sizeof(rec)) && strcmp(rec, name) == 0) {
+            at = i;
+            break;
+        }
+    }
+    if (at < 0) return false;
+    for (int i = at + 1; i < (int)s_fav_n; i++) {            // 后条前移
+        char nxt[8];
+        fav_key(i, nxt, sizeof(nxt));
+        fav_key(i - 1, key, sizeof(key));
+        if (appfw_store_get_str(nxt, rec, sizeof(rec))) {
+            (void)appfw_store_set_str(key, rec);
+        }
+    }
+    fav_key(s_fav_n - 1, key, sizeof(key));
+    (void)appfw_store_set_str(key, "");
+    s_fav_n--;
+    (void)appfw_store_set_u16(FAV_CNT_KEY, s_fav_n);
+    return true;
+}
+
+bool radio_store_fav_get(int idx, char *name_out, size_t cap)
+{
+    char key[8];
+    if (idx < 0 || idx >= (int)s_fav_n) return false;
+    fav_key(idx, key, sizeof(key));
+    return appfw_store_get_str(key, name_out, cap) && name_out[0];
+}
 
 int radio_store_catalog_count(void)
 {
@@ -86,8 +160,13 @@ void radio_store_init(void)
     } else {
         s_user_n = 0;
     }
-    ESP_LOGI(TAG, "台目 %d 台 + 自定义 %u 台", radio_store_catalog_count(),
-             (unsigned)s_user_n);
+    if (appfw_store_get_u16(FAV_CNT_KEY, &n, 0xFFFF) && n <= FAV_MAX) {
+        s_fav_n = (uint8_t)n;
+    } else {
+        s_fav_n = 0;
+    }
+    ESP_LOGI(TAG, "台目 %d 台 + 自定义 %u 台 + 收藏 %u 台",
+             radio_store_catalog_count(), (unsigned)s_user_n, (unsigned)s_fav_n);
 }
 
 int radio_store_count(void)

@@ -80,6 +80,9 @@ components/framework/       Framework aipassport-fw (submodule, business-free)
   appfw_viz.c               Spectrum analyzer (pure logic, host-tested)
   appfw_bars.c              Bar-array LVGL widget (the play-page spectrum)
   appfw_net/netlist/storage UI skeleton, WiFi engine, NVS wrappers
+  appfw_loudness.c          Loudness leveling (smart volume, slow AGC)
+  appfw_viz.c / bars.c      Spectrum analyzer / bar-array widget
+  appfw_netlog.c            Network logging (ring buffer + UDP syslog)
   appfw_stream/hls/icy      Generic stream pipeline (HLS/ICY/redirect/https)
 ```
 

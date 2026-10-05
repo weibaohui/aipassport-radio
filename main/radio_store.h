@@ -44,3 +44,11 @@ void radio_store_import_begin(void);
 
 // 回出厂状态:清空自定义台,返回条数(= 台目基数)。
 int radio_store_restore_factory(void);
+
+// ---- 收藏(按台名;台目与自定义台通用;上限 50,存 NVS 重启保持) ----
+// 台目重生成后同名台自动保持收藏;改名台的收藏静默失效。
+int radio_store_fav_count(void);
+bool radio_store_fav_has(const char *name);
+bool radio_store_fav_add(const char *name);      // 已收藏=幂等成功
+bool radio_store_fav_remove(const char *name);   // 不存在=false
+bool radio_store_fav_get(int idx, char *name_out, size_t cap);

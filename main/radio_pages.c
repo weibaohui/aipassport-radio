@@ -273,7 +273,8 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
         snprintf(s_ch_buf[2], sizeof(s_ch_buf[2]), "—");
     }
 
-    snprintf(s_ch_buf[7], sizeof(s_ch_buf[7]), "%s",
+    snprintf(s_ch_buf[7], sizeof(s_ch_buf[7]), "%s%s",
+             (s->station[0] && radio_store_fav_has(s->station)) ? "✦ " : "",
              s->station[0] ? s->station : "—");
 
     snprintf(s_ch_buf[6], sizeof(s_ch_buf[6]), "%s", state_text(s));
@@ -621,9 +622,10 @@ void radio_pages_home_poll(void)
         char text[RADIO_NAME_MAX + 24];
         const bool playing = (s.state == RADIO_PLAYING || s.state == RADIO_CONNECTING) &&
                              strcmp(s.station, st.name) == 0;
-        snprintf(text, sizeof(text), "%s %s%s",
+        snprintf(text, sizeof(text), "%s %s%s%s",
                  (idx == s_sel) ? LV_SYMBOL_RIGHT : " ",
                  playing ? LV_SYMBOL_PLAY " " : "",
+                 radio_store_fav_has(st.name) ? "✦ " : "",
                  st.name);
         show_row(s_rows[i], text);
         row_style(s_rows[i], i, idx == s_sel);
@@ -722,8 +724,20 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
             return APPFW_KEY_CONSUMED;
         }
         return APPFW_KEY_CONSUMED;
-    case 2: // 双击 = 上一页/下一页按钮(统一一页 5 行,设备一屏正好 5 行):
-            // 游标落新页首行,整窗翻动;播放页忽略。
+    case 2: // 双击:播放页 OK = 收藏/取消当前台;列表页上下 = 翻页(一页 5 行)。
+        if (s_page == PAGE_PLAY && btn == 2) {
+            radio_player_snap_t ps;
+            radio_player_snapshot(&ps);
+            if (!ps.station[0]) return APPFW_KEY_CONSUMED;
+            if (radio_store_fav_has(ps.station)) {
+                (void)radio_store_fav_remove(ps.station);
+                ESP_LOGI(TAG, "已取消收藏:%s", ps.station);
+            } else {
+                (void)radio_store_fav_add(ps.station);
+                ESP_LOGI(TAG, "已收藏:%s", ps.station);
+            }
+            return APPFW_KEY_CONSUMED;      // 台名 ✦ 标记随下一次 chrome 刷新(≤0.8s)
+        }
         if (s_page != PAGE_PLAY && total > 0 && btn <= 1) {
             int off = s_off + ((btn == 1) ? LIST_MAX : -LIST_MAX);
             if (off < 0) off = 0;
