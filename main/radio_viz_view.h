@@ -46,9 +46,7 @@ typedef struct {
     const char *title;      // 曲名(灰色小字)
     const char *status;     // 状态行,如 "正在播放"
     bool status_bad;        // 状态是错误(显示红色)
-    const char *info0;      // 信息卡:格式(如 MP3/AAC/—)
-    const char *info1;      // 信息卡:协议(http/https/HLS;NULL=不变)
-    const char *info2;      // 信息卡:码率/采样率(如 "128 kbps · 44.1 kHz")
+    const char *info2;      // 信息卡:码率/采样率/声道(如 "64 kbps · 44.1 kHz · 2ch")
 } radio_viz_chrome_t;
 
 typedef struct {
@@ -66,9 +64,7 @@ typedef struct {
 
     appfw_bars_t bars;     // 频谱柱阵(控件在框架:柱阵/色阶/辉光是机制)
 
-    lv_obj_t *info0;       // 信息卡:格式
-    lv_obj_t *info1;       // 信息卡:协议
-    lv_obj_t *info2;       // 信息卡:码率/采样率
+    lv_obj_t *info2;       // 信息卡:码率/采样率/声道
     lv_obj_t *status;      // 播放状态 / 错误
     lv_obj_t *hint;        // 底部按键提示
 

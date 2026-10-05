@@ -148,7 +148,7 @@ static void apply_page(void)
 #define CHROME_PERIOD_MS 500
 
 // title 最长 RADIO_TITLE_MAX(64),加上 "MP3 · 128 kbps · 44.1 kHz" 也要放得下。
-static char s_ch_buf[11][80];
+static char s_ch_buf[2][80];
 static char s_title_buf[RADIO_TITLE_MAX];   // 过滤后的曲名(列表页用)
 static radio_viz_chrome_t s_chrome;
 
@@ -257,25 +257,19 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
         s_ch_buf[5][0] = '\0';
     }
 
-    // ---- 信息卡:格式 / 协议 / 码率·采样率 ----
-    snprintf(s_ch_buf[8], sizeof(s_ch_buf[8]), "%s",
-             s->sample_rate ? "MP3" : "—");            // 简单解码器现役 MP3/HLS-AAC 经 AAC 解出后仍标 MP3 有误导,先按有无流区分
-    if (s->bitrate && strcasestr(s->title, "aac")) snprintf(s_ch_buf[8], sizeof(s_ch_buf[8]), "AAC");
-    snprintf(s_ch_buf[9], sizeof(s_ch_buf[9]), "%s",
-             strncmp(s->url, "https", 5) == 0 ? "https"
-             : s->url[0] ? (strstr(s->url, ".m3u8") ? "HLS" : "http") : "—");
+    // ---- 信息卡:码率·采样率·声道(单行常驻) ----
     if (s->bitrate) {
         const unsigned br = (unsigned)s->bitrate;
         const unsigned khz = (unsigned)(s->sample_rate / 1000);
         const unsigned tent = (unsigned)((s->sample_rate % 1000) / 100);
-        snprintf(s_ch_buf[10], sizeof(s_ch_buf[10]), "%u kbps · %u.%u kHz · %uch",
+        snprintf(s_ch_buf[2], sizeof(s_ch_buf[2]), "%u kbps · %u.%u kHz · %uch",
                  br, khz, tent, (unsigned)s->channels);
     } else if (s->sample_rate) {
-        snprintf(s_ch_buf[10], sizeof(s_ch_buf[10]), "%u.%u kHz · %uch",
+        snprintf(s_ch_buf[2], sizeof(s_ch_buf[2]), "%u.%u kHz · %uch",
                  (unsigned)(s->sample_rate / 1000),
                  (unsigned)((s->sample_rate % 1000) / 100), (unsigned)s->channels);
     } else {
-        snprintf(s_ch_buf[10], sizeof(s_ch_buf[10]), "—");
+        snprintf(s_ch_buf[2], sizeof(s_ch_buf[2]), "—");
     }
 
     snprintf(s_ch_buf[7], sizeof(s_ch_buf[7]), "%s",
@@ -291,9 +285,7 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
     s_chrome.title       = s_ch_buf[5];
     s_chrome.station     = s_ch_buf[7];
     s_chrome.status      = s_ch_buf[6];
-    s_chrome.info0       = s_ch_buf[8];
-    s_chrome.info1       = s_ch_buf[9];
-    s_chrome.info2       = s_ch_buf[10];
+    s_chrome.info2       = s_ch_buf[2];
     s_chrome.status_bad  = (s->state == RADIO_ERROR);
     return &s_chrome;
 }
