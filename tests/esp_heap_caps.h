@@ -17,3 +17,9 @@ static inline size_t heap_caps_get_free_size(int caps)
     (void)caps;
     return 200 * 1024;
 }
+
+static inline size_t heap_caps_get_total_size(int caps)
+{
+    (void)caps;
+    return 217 * 1024;
+}

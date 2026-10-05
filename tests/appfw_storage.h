@@ -49,3 +49,5 @@ static inline bool appfw_store_set_period(uint16_t v) { (void)v; return true; }
 
 static inline bool appfw_store_get_brightness(uint16_t *pct) { *pct = 100; return true; }
 static inline bool appfw_store_set_brightness(uint16_t pct) { (void)pct; return true; }
+
+static inline uint32_t appfw_storage_app_image_used(const void *p) { (void)p; return 0; }
