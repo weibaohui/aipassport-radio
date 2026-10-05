@@ -15,6 +15,7 @@
 #include "appfw_storage.h"
 #include "bsp_audio.h"
 #include "bsp_display.h"
+#include "esp_timer.h"
 #include "bsp_battery.h"
 #include "cJSON.h"
 #include "esp_http_server.h"
@@ -67,6 +68,7 @@ static lv_timer_t *s_viz_timer;
 #define VIZ_PERIOD_MS 100
 
 static lv_font_t s_f16, s_f24;
+static lv_font_t s_f16_golden, s_f24_golden;   // [临时调试] 字体结构哨兵
 static bool s_font_ready;
 
 static const char *state_text(const radio_player_snap_t *s);
@@ -78,6 +80,8 @@ static void ensure_fonts(void)
     s_f16.fallback = &lv_font_montserrat_14;
     s_f24 = app_font_24;
     s_f24.fallback = &lv_font_montserrat_20;
+    s_f16_golden = s_f16;
+    s_f24_golden = s_f24;
     s_font_ready = true;
 }
 
@@ -331,6 +335,29 @@ static void viz_timer_cb(lv_timer_t *timer)
         bands[k] = disp[k];
     }
 
+    // [临时调试] 字体结构哨兵:被改写即刻记录时刻+字段偏移+新旧值
+    {
+        static uint8_t reported;
+        const lv_font_t *cur[2] = { &s_f16, &s_f24 };
+        const lv_font_t *gold[2] = { &s_f16_golden, &s_f24_golden };
+        for (int fi = 0; fi < 2; fi++) {
+            const uint8_t *c = (const uint8_t *)cur[fi];
+            const uint8_t *g = (const uint8_t *)gold[fi];
+            for (size_t b = 0; b < sizeof(lv_font_t); b++) {
+                if (c[b] != g[b] && !(reported & (1 << (fi * 8 + (b > 7 ? 7 : b))))) {
+                    reported |= (uint8_t)(1 << (fi * 8 + (b > 7 ? 7 : b)));
+                    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000000LL);
+                    ESP_LOGE(TAG, "[哨兵] 字体%d 偏移+%u 被改: %02x→%02x (t=%us)",
+                             fi, (unsigned)b, g[b], c[b], now);
+                }
+            }
+        }
+    }
+    // [临时调试] 播放中强制进播放页(复现按键播放的 UI 路径)
+    if (s.state == RADIO_PLAYING && s_page != PAGE_PLAY) {
+        s_page = PAGE_PLAY;
+        apply_page();
+    }
     static uint32_t chrome_tick;
     if (++chrome_tick % (CHROME_PERIOD_MS / VIZ_PERIOD_MS) == 0) play_chrome(&s);
 

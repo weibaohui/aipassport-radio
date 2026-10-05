@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include "esp_log.h"
 #include <string.h>
 
 #include "appfw_viz.h"
@@ -64,7 +65,9 @@ static lv_obj_t *flat_label(lv_obj_t *parent, const lv_font_t *f, uint32_t color
     lv_obj_set_pos(l, x, y);
     lv_obj_set_style_text_font(l, f, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    // LONG_DOT 会把 "..." 原地写进 label 文本缓冲(池内),曾疑似引发
+    // text_len 被写花(0xFFFFFFFF)导致字体查表崩溃——改 CLIP,只裁不改。
+    lv_label_set_long_mode(l, LV_LABEL_LONG_CLIP);
     lv_label_set_text(l, text);
     return l;
 }
@@ -134,6 +137,10 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->hint   = wrap_label(v->root, font16, C_HINT, v->w - MARGIN_X * 2, 38,
                            MARGIN_X, HINT_Y, "上下切台，短按OK暂停，长按OK回选台");
 
+    // [临时调试] 记录关键 label 地址,崩溃 backtrace 的 obj 指针可对号
+    ESP_LOGI("mv_view", "labels: clock=%p station=%p title=%p info2=%p status=%p bars_root=%p",
+             (void *)v->clock, (void *)v->station, (void *)v->title,
+             (void *)v->info2, (void *)v->status, (void *)v->bars.root);
     lv_obj_set_user_data(v->root, v);
     return v->root;
 }
