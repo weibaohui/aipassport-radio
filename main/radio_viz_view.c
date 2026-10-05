@@ -27,6 +27,9 @@
 #define VIZ_H        44
 #define VIZ_PAD      6
 
+#define INFO0_Y      168     // 信息卡:格式
+#define INFO1_Y      190     // 信息卡:协议
+#define INFO2_Y      212     // 信息卡:码率/采样率(频谱面板上方)
 #define STATUS_Y     262
 #define HINT_Y       280
 
@@ -121,6 +124,20 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     appfw_bars_create(&v->bars, v->root, PANEL_X, VIZ_Y, PANEL_W, VIZ_H,
                       VIZ_PAD, 4, RADIO_VIZ_BAR_N);
 
+    // ---- 信息卡(台名与频谱面板之间的空档) ----
+    // 键在左(dem),值紧跟其后(text 色);三行纵排填满中段。
+    struct { lv_obj_t **slot; const char *key; int32_t y; } IC[] = {
+        { &v->info0, "格式", INFO0_Y },
+        { &v->info1, "协议", INFO1_Y },
+        { &v->info2, "码率", INFO2_Y },
+    };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *kl = flat_label(v->root, font16, C_DIM, 60, MARGIN_X, IC[i].y, IC[i].key);
+        (void)kl;
+        *IC[i].slot = flat_label(v->root, font16, C_TITLE, v->w - MARGIN_X * 2 - 60,
+                                 MARGIN_X + 60, IC[i].y, "—");
+    }
+
     // ---- 状态 / 提示 ----
     v->status = flat_label(v->root, font16, C_OK, v->w - MARGIN_X * 2,
                            MARGIN_X, STATUS_Y, "");
@@ -141,6 +158,9 @@ void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t le
     appfw_bars_update(&v->bars, bands, bands ? APPFW_VIZ_BANDS : 0, level);
 
     if (chrome) {
+        if (chrome->info0) lv_label_set_text(v->info0, chrome->info0);
+        if (chrome->info1) lv_label_set_text(v->info1, chrome->info1);
+        if (chrome->info2) lv_label_set_text(v->info2, chrome->info2);
         if (chrome->app_name) lv_label_set_text(v->app_name, chrome->app_name);
         if (chrome->clock)    lv_label_set_text(v->clock, chrome->clock);
         if (chrome->signal_bars >= 0) {
