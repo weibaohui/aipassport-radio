@@ -7,3 +7,4 @@
 # 分发语义(握手/列举/调用/通知/错误码)在这里钉死。
 radio_store main/radio_store.c main/radio_streams.c
 appfw_mcp components/framework/appfw/src/appfw_mcp.c components/framework/tests/thirdparty/cJSON/cJSON.c
+music_vibe components/framework/appfw/src/music_vibe.c
