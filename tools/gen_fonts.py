@@ -36,6 +36,7 @@ OTF = FONTS / "NotoSansSC-Regular.otf"
 # radio_streams.c 也必须在列:电台名直接进 lv_label_set_text(),
 # 不加的话内置台名全是空白。
 SOURCES_16 = [
+    ROOT / "main" / "radio_catalog.h",   # 台名数据:直接扫,不依赖仓外清单文件
     FW / "appfw" / "src" / "appfw_ui.c",
     ROOT / "main" / "radio_pages.c",
     ROOT / "main" / "radio_viz_view.c",

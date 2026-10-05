@@ -2,7 +2,7 @@
 // 曲名等动态文本显示前按此表过滤,字库外的字不进 LVGL(否则是方框)。
 #include <stdint.h>
 
-#define RADIO_TITLE_CP_COUNT 619
+#define RADIO_TITLE_CP_COUNT 615
 static const uint16_t k_radio_title_cps[RADIO_TITLE_CP_COUNT] = {
     0x00B7,
     0x2014,
@@ -98,7 +98,6 @@ static const uint16_t k_radio_title_cps[RADIO_TITLE_CP_COUNT] = {
     0x5316,
     0x5317,
     0x533A,
-    0x534F,
     0x5355,
     0x5357,
     0x5360,
@@ -231,7 +230,6 @@ static const uint16_t k_radio_title_cps[RADIO_TITLE_CP_COUNT] = {
     0x5EFA,
     0x5F00,
     0x5F03,
-    0x5F0F,
     0x5F20,
     0x5F25,
     0x5F53,
@@ -332,7 +330,6 @@ static const uint16_t k_radio_title_cps[RADIO_TITLE_CP_COUNT] = {
     0x67F3,
     0x6807,
     0x682A,
-    0x683C,
     0x6842,
     0x6846,
     0x6850,
@@ -516,7 +513,6 @@ static const uint16_t k_radio_title_cps[RADIO_TITLE_CP_COUNT] = {
     0x89D2,
     0x89E3,
     0x8B66,
-    0x8BAE,
     0x8BAF,
     0x8BB8,
     0x8BBE,

@@ -78,6 +78,7 @@ static lv_obj_t *wrap_label(lv_obj_t *parent, const lv_font_t *f, uint32_t color
                             int32_t w, int32_t h, int32_t x, int32_t y, const char *text)
 {
     lv_obj_t *l = flat_label(parent, f, color, w, x, y, text);
+    // 多行必须 WRAP(CRASH 根因是 DOT 的原地改写;WRAP 只做布局,不改缓冲)。
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_height(l, h);
     return l;
@@ -137,10 +138,6 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->hint   = wrap_label(v->root, font16, C_HINT, v->w - MARGIN_X * 2, 38,
                            MARGIN_X, HINT_Y, "上下切台，短按OK暂停，长按OK回选台");
 
-    // [临时调试] 记录关键 label 地址,崩溃 backtrace 的 obj 指针可对号
-    ESP_LOGI("mv_view", "labels: clock=%p station=%p title=%p info2=%p status=%p bars_root=%p",
-             (void *)v->clock, (void *)v->station, (void *)v->title,
-             (void *)v->info2, (void *)v->status, (void *)v->bars.root);
     lv_obj_set_user_data(v->root, v);
     return v->root;
 }
