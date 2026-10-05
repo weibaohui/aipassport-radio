@@ -174,7 +174,7 @@ void app_main(void)
         .app_config_fill  = radio_pages_app_config_fill,
         // 音量交给框架设置菜单;主页按键全被 home_key 接管,默认入口关掉。
         .menu_opts = k_menu_opts,
-        .menu_opts_count = 1,
+        .menu_opts_count = 3,
         // 内置菜单显式使能(默认全关):收音机要五项,刷新周期无意义不开。
         .menu_show_mask = APP_MENU_SHOW_MASK,
         // 主页长按动作表:上=设置菜单,下=音量页(长按 OK 留给应用自己)。
