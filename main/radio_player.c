@@ -29,6 +29,7 @@
 #include "radio_mp3_probe.h"
 #include "radio_ts_probe.h"
 #include "appfw_viz.h"
+#include "appfw_loudness.h"
 
 static const char *TAG = "radio_player";
 
@@ -267,6 +268,29 @@ static void viz_feed(const int16_t *pcm, size_t bytes, uint32_t rate)
     s_viz_level = appfw_viz_level(&s_viz);
 }
 
+// ---- 响度均衡(智能维持) ----
+static appfw_loudness_t s_loud;
+static bool s_loud_on = true;        // 默认开;设置菜单「智能维持」持久化
+
+void radio_player_set_loudness(bool on)
+{
+    s_loud_on = on;
+    ESP_LOGI(TAG, "响度均衡:%s", on ? "开" : "关");
+}
+
+// 解码输出统一过这里再进 I2S。增益变化每 5 秒记一条日志,给真机调参看曲线。
+static void loudness_apply(int16_t *pcm, size_t bytes)
+{
+    if (!s_loud_on) return;
+    appfw_loudness_process(&s_loud, pcm, bytes);
+    static uint32_t blocks;
+    if (++blocks >= 50) {            // ≈5s
+        blocks = 0;
+        ESP_LOGI(TAG, "响度增益 %+d.%02ddB", (int)(s_loud.gain_mdB / 100),
+                 (int)abs(s_loud.gain_mdB % 100));
+    }
+}
+
 void radio_player_viz_snapshot(uint8_t *out, uint8_t bands, uint8_t *level)
 {
     if (out && bands) for (int k = 0; k < bands; k++) out[k] = s_viz_out[k];
@@ -358,6 +382,7 @@ static radio_err_t mp3_feed(mp3_ctx_t *c, const uint8_t *data, size_t len)
                 s_coded_rate = c->rate;
                 bsp_audio_set_volume(c->vol);
                 c->audio_started = true;
+                appfw_loudness_reset(&s_loud, c->rate);   // 每台独立适应
                 set_snap(RADIO_PLAYING, RADIO_ERR_NONE);
                 ESP_LOGI(TAG, "开始播放: %uHz %uch", (unsigned)c->rate, c->ch);
             } else if (!c->audio_started) {
@@ -367,6 +392,7 @@ static radio_err_t mp3_feed(mp3_ctx_t *c, const uint8_t *data, size_t len)
                 }
                 bsp_audio_set_volume(c->vol);
                 c->audio_started = true;
+                appfw_loudness_reset(&s_loud, c->rate);   // 每台独立适应
                 set_snap(RADIO_PLAYING, RADIO_ERR_NONE);
                 ESP_LOGI(TAG, "开始播放: %uHz %uch", (unsigned)c->rate, c->ch);
             }
@@ -384,6 +410,7 @@ static radio_err_t mp3_feed(mp3_ctx_t *c, const uint8_t *data, size_t len)
                     const int32_t a = (m >= 0) ? m : -m;
                     if (a > peak) peak = a;
                 }
+                loudness_apply(mono, (size_t)frames * 2);
                 const bool wok = bsp_audio_write(mono, (size_t)frames * 2) == ESP_OK;
                 viz_feed(mono, (size_t)frames * 2, c->rate);
                 if (!wok && ++c->write_fails > 64) {
@@ -398,6 +425,7 @@ static radio_err_t mp3_feed(mp3_ctx_t *c, const uint8_t *data, size_t len)
                     const int32_t a = (in[i] >= 0) ? in[i] : -in[i];
                     if (a > peak) peak = a;
                 }
+                loudness_apply((int16_t *)out.buffer, out.decoded_size);
                 const bool wok = bsp_audio_write(out.buffer, out.decoded_size) == ESP_OK;
                 viz_feed((const int16_t *)out.buffer, out.decoded_size, c->rate);
                 if (!wok && ++c->write_fails > 64) {
@@ -748,6 +776,8 @@ void radio_player_reserve(void)
 int radio_player_start(void)
 {
     if (s_task) return 0;
+    // 响度均衡默认参数;每台开始时 reset 重算块长与测量状态。
+    appfw_loudness_init(&s_loud, NULL);
     // 解码器两层注册只做一次。以前每次收台都注册/反注册一遍,纯浪费,
     // 还埋着"上一台没反注册干净影响下一台"的状态错乱风险。
     // register_default() 会把组件里所有解码器都注册进来,镜像因此多约 580KB;

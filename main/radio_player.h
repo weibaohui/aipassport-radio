@@ -67,6 +67,10 @@ void radio_set_volume(uint8_t percent);
 uint8_t radio_player_level(void);
 
 // 暂停/继续(播放页 OK)。暂停 = 保持连接但丢弃音频,恢复即接最新流。
+// 响度均衡(智能维持):拉平台与台之间的响度差(慢速 AGC,±12dB 硬边界)。
+// on/off 由设置菜单持久化;开关即时生效,换台自动重新适应。
+void radio_player_set_loudness(bool on);
+
 void radio_player_toggle_pause(void);
 
 // 显式暂停/恢复(MCP 用):pause 只在播放中生效(保持连接,取流不断);
