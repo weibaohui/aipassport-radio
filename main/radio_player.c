@@ -272,9 +272,12 @@ static void viz_feed(const int16_t *pcm, size_t bytes, uint32_t rate)
 static appfw_loudness_t s_loud;
 
 // 解码输出统一过这里再进 I2S。增益变化每 5 秒记一条日志,给真机调参看曲线。
+static int32_t s_loud_last_gain;     // 上一台收敛增益:切台时携带,消除骤降
+
 static void loudness_apply(int16_t *pcm, size_t bytes)
 {
     appfw_loudness_process(&s_loud, pcm, bytes);
+    s_loud_last_gain = s_loud.gain_mdB;
     static uint32_t blocks;
     if (++blocks >= 50) {            // ≈5s
         blocks = 0;
@@ -375,6 +378,8 @@ static radio_err_t mp3_feed(mp3_ctx_t *c, const uint8_t *data, size_t len)
                 bsp_audio_set_volume(c->vol);
                 c->audio_started = true;
                 appfw_loudness_reset(&s_loud, c->rate);   // 每台独立适应
+                // 携带上一台收敛增益作起点:新台不再从 0dB 爬坡(听感=音量被置 0)
+                appfw_loudness_seed_gain(&s_loud, s_loud_last_gain);
                 set_snap(RADIO_PLAYING, RADIO_ERR_NONE);
                 ESP_LOGI(TAG, "开始播放: %uHz %uch", (unsigned)c->rate, c->ch);
             } else if (!c->audio_started) {
@@ -385,6 +390,8 @@ static radio_err_t mp3_feed(mp3_ctx_t *c, const uint8_t *data, size_t len)
                 bsp_audio_set_volume(c->vol);
                 c->audio_started = true;
                 appfw_loudness_reset(&s_loud, c->rate);   // 每台独立适应
+                // 携带上一台收敛增益作起点:新台不再从 0dB 爬坡(听感=音量被置 0)
+                appfw_loudness_seed_gain(&s_loud, s_loud_last_gain);
                 set_snap(RADIO_PLAYING, RADIO_ERR_NONE);
                 ESP_LOGI(TAG, "开始播放: %uHz %uch", (unsigned)c->rate, c->ch);
             }
