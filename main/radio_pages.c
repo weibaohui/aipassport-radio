@@ -361,6 +361,7 @@ static void fx_show_bars(bool show)
     if (s_play) {
         if (show) lv_obj_clear_flag(s_play->bars.root, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_play->bars.root, LV_OBJ_FLAG_HIDDEN);
+        s_play->bars.rainbow = show;           // 经典频谱:彩虹流动色
     }
 }
 
@@ -420,10 +421,12 @@ void radio_pages_set_effect(uint8_t v)
     ESP_LOGI(TAG, "动态效果:%s", v == 0 ? "经典频谱" : v == 1 ? "LED 电平表" : "对称频谱");
 }
 
-// LED 电平表:高度量化成段(分段感),三档色,峰帽 2px 缓落
+// LED 电平表:高度量化成段(分段感),彩虹流动色,峰帽 2px 缓落
 static void fx_led_render(const uint8_t *bands)
 {
     if (!s_play_layer) return;
+    static uint16_t hue;
+    hue = (uint16_t)((hue + 4) % 360);
     for (int i = 0; i < APPFW_VIZ_BANDS; i++) {
         const uint8_t seg = (uint8_t)((uint32_t)bands[i] * FX_SEGS / 256);
         const uint8_t h = (uint8_t)(seg * FX_SEG_H);
@@ -438,10 +441,10 @@ static void fx_led_render(const uint8_t *bands)
             } else {
                 lv_obj_add_flag(col, LV_OBJ_FLAG_HIDDEN);
             }
-            const uint8_t tier = seg >= FX_SEGS ? 2u : seg >= FX_SEGS - 1 ? 1u : 0u;
-            static const uint32_t TIERC[3] = { FX_GREEN, FX_YELLOW, FX_RED };
-            lv_obj_set_style_bg_color(col, lv_color_hex(TIERC[tier]), 0);
         }
+        // 彩虹流动色:每列错开 36°,整体每帧推进
+        const uint16_t rh2 = (uint16_t)((hue + (uint32_t)i * 36) % 360);
+        lv_obj_set_style_bg_color(col, lv_color_hsv_to_rgb(rh2, 82, 80), 0);
         // 峰帽
         lv_obj_t *cap = s_fx_led[APPFW_VIZ_BANDS + i];
         uint32_t c = s_fx_cap[i];
@@ -457,12 +460,18 @@ static void fx_led_render(const uint8_t *bands)
 static void fx_sym_render(const uint8_t *bands)
 {
     if (!s_play_layer) return;
+    static uint16_t hue;
+    hue = (uint16_t)((hue + 4) % 360);
     const int32_t cx = FX_PANEL_Y + FX_PANEL_H / 2;
     for (int i = 0; i < APPFW_VIZ_BANDS; i++) {
         const int32_t up = (int32_t)bands[i] * 22 / 256;       // 上半最大 22px
         const int32_t dn = up * 55 / 100;
         lv_obj_t *u = s_fx_sym[i], *d = s_fx_sym[APPFW_VIZ_BANDS + i];
         if (!u || !d) continue;
+        const uint16_t rh_ = (uint16_t)((hue + (uint32_t)i * 36) % 360);
+        const lv_color_t rc = lv_color_hsv_to_rgb(rh_, 82, 80);
+        lv_obj_set_style_bg_color(u, rc, 0);
+        lv_obj_set_style_bg_color(d, rc, 0);
         if (up) {
             lv_obj_clear_flag(u, LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_height(u, up);
