@@ -60,3 +60,6 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
 # FAT 文件分区已拆(2026-10-04):清单=台目 rodata + 自定义台 NVS,
 # files 分区保留在分区表里但不再使用(避免改布局,分段刷机兼容旧机)。
+
+# --- 配网二维码(设置→配网页展示 WiFi/管理地址二维码) ---
+CONFIG_LV_USE_QRCODE=y
