@@ -13,6 +13,7 @@ which combination was ever verified. Chinese version:
 | --- | --- | --- | --- |
 | 2026-10-05 | `9fed91e` | `7c85191` | Provisioning rework / portal truncation fix / two-phase scan / bar smoothing / volume row; community rev 2053 |
 | 2026-10-05 | `46ce525` | `a4628b6` | Framework full common-Chinese fonts (3500 chars, LV_FONT_FMT_TXT_LARGE); app drops its own fonts |
+| 2026-10-06 | `46ce525` | `026ffd9` | Font charset expanded to GB2312 level-1 (4827 chars); verified on-device via kbmic (same hardware), not re-flashed |
 
 - Full-device image: `build/FoloToy-AI-Passport-full.bin` (rebuilt per release,
   flashed at 0x0).
