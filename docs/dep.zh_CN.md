@@ -13,6 +13,7 @@
 | 日期 | 应用(aipassport-radio) | 框架(aipassport-fw) | 说明 |
 | --- | --- | --- | --- |
 | 2026-10-05 | `9fed91e` | `7c85191` | 配网重构/门户截断修复/扫描两段式/柱阵平滑/音量行;社区 rev 2053 提交版 |
+| 2026-10-05 | `46ce525` | `a4628b6` | 框架全量中文字库(常用 3500 字,LV_FONT_FMT_TXT_LARGE);应用删除自有字库 |
 
 - 整机镜像:`build/FoloToy-AI-Passport-full.bin`(每次发版重新出,0x0 全量)
 - 运行期核对:屏幕 设置 → 设备信息,或 MCP `get_device_info`,报告

@@ -12,6 +12,7 @@ which combination was ever verified. Chinese version:
 | Date | App (aipassport-radio) | Framework (aipassport-fw) | Notes |
 | --- | --- | --- | --- |
 | 2026-10-05 | `9fed91e` | `7c85191` | Provisioning rework / portal truncation fix / two-phase scan / bar smoothing / volume row; community rev 2053 |
+| 2026-10-05 | `46ce525` | `a4628b6` | Framework full common-Chinese fonts (3500 chars, LV_FONT_FMT_TXT_LARGE); app drops its own fonts |
 
 - Full-device image: `build/FoloToy-AI-Passport-full.bin` (rebuilt per release,
   flashed at 0x0).
