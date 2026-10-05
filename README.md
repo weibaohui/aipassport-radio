@@ -49,7 +49,7 @@ info — the full URL is on screen. Or check your router's client list.
 
 ### 3. Start talking
 
-Any MCP client sees 23 tools (table below). You never need tool names — speak
+Any MCP client sees 27 tools (table below). You never need tool names — speak
 naturally and the AI picks:
 
 | You say | It does |
@@ -109,6 +109,9 @@ WiFi and device:
 | `wifi_connect_saved` | `ssid` | connect to a saved hotspot |
 | `get_device_info` | — | firmware / IP / free heap / uptime |
 | `get_provisioning_status` | — | provisioning portal state |
+| `get_recent_logs` | `count?` | recent on-device logs (ring buffer, chronological) |
+| `set_log_level` | `tag?`, `level` | adjust log level (esp_log) |
+| `set_netlog` | `on`, `ip?`, `port?` | UDP syslog push; receiver: `nc -kul 5514` |
 | `set_screen_off` | `seconds?` | screen-sleep timer (no arg = query; 0 = never) |
 | `set_brightness` | `percent?` | backlight level (no arg = query; 10-100, snapped to gears) |
 

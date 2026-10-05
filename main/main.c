@@ -26,6 +26,7 @@
 #include "radio_pages.h"
 #include "radio_mcp.h"
 #include "appfw_mcp.h"
+#include "appfw_netlog.h"
 #include "radio_player.h"
 
 static const char *TAG = "main";
@@ -119,6 +120,7 @@ void app_main(void)
     if (net_err != 0) {
         ESP_LOGW(TAG, "WiFi 初始化返回 %d", net_err);
     }
+    appfw_netlog_init();          // 网络日志:环形缓冲常开,AI 可取;UDP 推送按配置
     radio_mcp_init();             // MCP 工具表:AI 经门户 /mcp 操作设备
     // 框架基础功能跟随菜单使能位:菜单显示的项,AI 也能操作;没显示的不挂载。
     appfw_mcp_set_builtin_tools(APP_MENU_SHOW_MASK);

@@ -43,7 +43,7 @@ http://<设备IP>:8080/mcp
 
 ### 3. 开始说话
 
-任何支持 MCP 的 AI 客户端连上后,它会看到 23 个工具(见下表)。你不需要记
+任何支持 MCP 的 AI 客户端连上后,它会看到 27 个工具(见下表)。你不需要记
 工具名,直接说人话,AI 自己挑:
 
 | 你说 | 它做 |
@@ -100,6 +100,9 @@ WiFi 与设备:
 | `wifi_connect_saved` | `ssid` | 连一个已存热点 |
 | `get_device_info` | — | 固件版本/IP/空闲内存/运行时长 |
 | `get_provisioning_status` | — | 配网门户状态 |
+| `get_recent_logs` | `count?` | 取设备最近日志(环形缓冲,时间正序) |
+| `set_log_level` | `tag?`, `level` | 调整日志级别 |
+| `set_netlog` | `on`, `ip?`, `port?` | UDP syslog 推送;接收端 `nc -kul 5514` 即收 |
 | `set_screen_off` | `seconds?` | 熄屏时间档位(无参数=查询当前值) |
 
 ## 按键(给不用 AI 的时候)
