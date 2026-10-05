@@ -136,7 +136,7 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->status = flat_label(v->root, font16, C_OK, v->w - MARGIN_X * 2,
                            MARGIN_X, STATUS_Y, "");
     v->hint   = wrap_label(v->root, font16, C_HINT, v->w - MARGIN_X * 2, 38,
-                           MARGIN_X, HINT_Y, "上下切台，短按OK暂停，长按OK回选台");
+                           MARGIN_X, HINT_Y, "上下切台，短按OK暂停，长按OK选台");
 
     lv_obj_set_user_data(v->root, v);
     return v->root;
