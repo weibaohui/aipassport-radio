@@ -19,12 +19,20 @@ in — then just say:
 
 ### 1. Provision WiFi (once)
 
-With no saved network the device opens a provisioning hotspot on boot. Join it
-from your phone and the captive portal pops up automatically; pick your WiFi,
-enter the password, and the portal disappears once the device is online.
+Provisioning is **manual**: long-press the UP button to open Settings, choose
+Provisioning, then "1. Open hotspot". The device leaves its current network and
+switches to dedicated hotspot mode; the screen shows the hotspot name, two QR
+codes and on-screen guidance.
 
-Changed networks later: tell the AI "connect to hotspot XXX" (if saved), or
-use the on-device menu Settings → Provisioning.
+Then, on your phone: join that hotspot (scan the QR or pick it from the WiFi
+list — it is open), and the portal opens automatically (or visit
+http://192.168.4.1). Tap "Scan", tick your home WiFi, enter the password, then
+tap "Save & connect". The hotspot closes, the device joins your WiFi, shows
+"Done" on screen and returns to the play view — provisioning finished.
+
+Changed networks later: repeat the steps above (the device leaves its current
+network first), or just tell the AI "list saved hotspots / remove hotspot XXX /
+connect to hotspot XXX".
 
 ### 2. Plug the AI in
 
