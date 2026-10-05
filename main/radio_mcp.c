@@ -442,16 +442,6 @@ static int tool_list_favorites(cJSON *args, appfw_mcp_resp_t *resp)
     return 0;
 }
 
-// [临时调试] 远程拉起配网门户
-static int tool_prov_start(cJSON *args, appfw_mcp_resp_t *resp)
-{
-    (void)args;
-    extern void appfw_net_start_portal(void);
-    appfw_net_start_portal();
-    appfw_mcp_resp_addf(resp, "配网门户已启动");
-    return 0;
-}
-
 static const appfw_mcp_tool_t TOOLS[] = {
     { "play_index", "按下标播放电台(1 起的全清单编号,1-6 是内置精品台;编号用 search_stations/list_stations 查)",
       "{\"type\":\"object\",\"properties\":{\"index\":{\"type\":\"integer\"}},\"required\":[\"index\"]}",
@@ -498,8 +488,6 @@ static const appfw_mcp_tool_t TOOLS[] = {
       tool_favorite_remove },
     { "list_favorites", "列出全部收藏的电台",
       "{}", tool_list_favorites },
-    { "prov_start_debug", "启动配网门户(调试)",
-      "{}", tool_prov_start },
     { "wifi_add_hotspot", "添加新热点(名称+密码);connect_now=true 立即连接",
       "{\"type\":\"object\",\"properties\":{\"ssid\":{\"type\":\"string\"},\"password\":{\"type\":\"string\"},\"connect_now\":{\"type\":\"boolean\"}},\"required\":[\"ssid\"]}",
       tool_wifi_add },
