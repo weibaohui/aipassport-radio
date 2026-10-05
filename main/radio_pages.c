@@ -274,7 +274,7 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
     }
 
     snprintf(s_ch_buf[7], sizeof(s_ch_buf[7]), "%s%s",
-             (s->station[0] && radio_store_fav_has(s->station)) ? "✦ " : "",
+             (s->station[0] && radio_store_fav_has(s->station)) ? "★ " : "",
              s->station[0] ? s->station : "—");
 
     snprintf(s_ch_buf[6], sizeof(s_ch_buf[6]), "%s", state_text(s));
@@ -625,7 +625,7 @@ void radio_pages_home_poll(void)
         snprintf(text, sizeof(text), "%s %s%s%s",
                  (idx == s_sel) ? LV_SYMBOL_RIGHT : " ",
                  playing ? LV_SYMBOL_PLAY " " : "",
-                 radio_store_fav_has(st.name) ? "✦ " : "",
+                 radio_store_fav_has(st.name) ? "★ " : "",
                  st.name);
         show_row(s_rows[i], text);
         row_style(s_rows[i], i, idx == s_sel);
@@ -736,7 +736,7 @@ appfw_key_action_t radio_pages_home_key(int btn, int ev)
                 (void)radio_store_fav_add(ps.station);
                 ESP_LOGI(TAG, "已收藏:%s", ps.station);
             }
-            return APPFW_KEY_CONSUMED;      // 台名 ✦ 标记随下一次 chrome 刷新(≤0.8s)
+            return APPFW_KEY_CONSUMED;      // 台名 ★ 标记随下一次 chrome 刷新(≤0.8s)
         }
         if (s_page != PAGE_PLAY && total > 0 && btn <= 1) {
             int off = s_off + ((btn == 1) ? LIST_MAX : -LIST_MAX);

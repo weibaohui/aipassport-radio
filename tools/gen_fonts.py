@@ -46,6 +46,7 @@ SOURCES_16 = [
 # 24px 用于顶栏标题(main.c 的 .home_title)和播放页台名(radio_streams.c 的
 # 电台名)。台名不收进 24px 的话,播放页大字全是方框(2026-10-03 真机踩坑)。
 SOURCES_24 = [ROOT / "main" / "main.c", ROOT / "main" / "radio_streams.c",
+              ROOT / "main" / "radio_pages.c",   # 播放页台名带收藏 ★ 前缀
               FW / "appfw" / "src" / "appfw_ui.c"]
 
 # 大清单的台名是运行时数据,但集合是已知的:把清单文件的台名一并收进字库,
@@ -65,7 +66,7 @@ def list_name_chars(path: Path) -> set[str]:
     return out
 
 
-PUNCT = set("，。：；？！（）《》【】—…·℃─′″")
+PUNCT = set("，。：；？！（）《》【】—…·℃─′″★")   # ★=收藏标记
 ASCII = "".join(chr(c) for c in range(0x20, 0x7F))
 
 
