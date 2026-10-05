@@ -65,8 +65,12 @@ typedef struct {
     appfw_bars_t bars;     // 频谱柱阵(控件在框架:柱阵/色阶/辉光是机制)
 
     lv_obj_t *info2;       // 信息卡:码率/采样率/声道
+    lv_obj_t *vol;         // 音量:xx%(信息卡上一行)
     lv_obj_t *status;      // 播放状态 / 错误
     lv_obj_t *hint;        // 底部按键提示
+
+    uint8_t vol_shown;     // 上次画的音量(差分,防每帧重画)
+    bool vol_drawn;
 
     // 屏幕尺寸。设备是 240x320,模拟器用同样尺寸,这样看到的就是真实效果。
     int32_t w;

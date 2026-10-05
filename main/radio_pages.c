@@ -277,7 +277,9 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
              (s->station[0] && radio_store_fav_has(s->station)) ? "★ " : "",
              s->station[0] ? s->station : "—");
 
-    snprintf(s_ch_buf[6], sizeof(s_ch_buf[6]), "%s", state_text(s));
+    // 播放中状态行留空(用户定稿):连接成功什么都不显示;其余状态照常有字。
+    if (s->state == RADIO_PLAYING) s_ch_buf[6][0] = '\0';
+    else snprintf(s_ch_buf[6], sizeof(s_ch_buf[6]), "%s", state_text(s));
 
     s_chrome.app_name    = s_ch_buf[0];
     s_chrome.clock       = s_ch_buf[1];
@@ -566,7 +568,9 @@ void radio_pages_home_build(lv_obj_t *page)
         fx_apply(s_effect);          // 按当前档位建效果对象(开机/页面重建统一入口)
     }
 
-    s_page = PAGE_LIST;
+    // s_page 不在重建时重置(用户定稿 2026-10-05):设置返回要落在离开时的
+    // 层——播放中回播放页,而不是永远回列表。停止路径的按键处理会自己把它
+    // 切回 PAGE_LIST,静态初始值 0 = PAGE_LIST 保证首次开机落在列表。
     apply_page();
     clamp_cursor();
 }

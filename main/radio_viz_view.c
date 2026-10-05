@@ -28,6 +28,7 @@
 #define VIZ_H        60
 #define VIZ_PAD      6
 
+#define INFO_VOL_Y   148     // 音量:xx%(信息卡上一行,用户定稿 2026-10-05)
 #define INFO2_Y      172     // 信息卡:码率/采样率/声道(单行)
 #define STATUS_Y     266
 #define HINT_Y       280
@@ -132,6 +133,12 @@ lv_obj_t *radio_viz_view_create(lv_obj_t *parent,
     v->info2 = flat_label(v->root, font16, C_TITLE, v->w - MARGIN_X * 2 - 60,
                           MARGIN_X + 60, INFO2_Y, "—");
 
+    // ---- 音量行(码率上方) ----
+    lv_obj_t *vk = flat_label(v->root, font16, C_DIM, 60, MARGIN_X, INFO_VOL_Y, "音量");
+    (void)vk;
+    v->vol = flat_label(v->root, font16, C_TITLE, v->w - MARGIN_X * 2 - 60,
+                        MARGIN_X + 60, INFO_VOL_Y, "--");
+
     // ---- 状态 / 提示 ----
     v->status = flat_label(v->root, font16, C_OK, v->w - MARGIN_X * 2,
                            MARGIN_X, STATUS_Y, "");
@@ -171,7 +178,10 @@ void radio_viz_view_update(radio_viz_view_t *v, const uint8_t *bands, uint8_t le
         }
     }
 
-    // 音量不再单画一条:顶栏 + 两块面板已经把 320px 排满,音量并进
-    // 副标题(音量条宽度就是副标题后面那一小段)会更挤,不如直接显示数值。
-    (void)volume;
+    // 音量行:值变化才重画(每 60ms 都到,但数值很少变)。
+    if (!v->vol_drawn || v->vol_shown != volume) {
+        lv_label_set_text_fmt(v->vol, "%d%%", volume);
+        v->vol_shown = volume;
+        v->vol_drawn = true;
+    }
 }
