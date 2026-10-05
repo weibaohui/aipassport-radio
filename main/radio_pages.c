@@ -149,7 +149,7 @@ static void apply_page(void)
 #define CHROME_PERIOD_MS 500
 
 // title 最长 RADIO_TITLE_MAX(64),加上 "MP3 · 128 kbps · 44.1 kHz" 也要放得下。
-static char s_ch_buf[2][80];
+static char s_ch_buf[8][80];   // 8 槽:0 名 1 时钟 2 信息卡 3 电量 4 CH 5 曲名 6 状态 7 台名
 static char s_title_buf[RADIO_TITLE_MAX];   // 过滤后的曲名(列表页用)
 static radio_viz_chrome_t s_chrome;
 
@@ -226,10 +226,6 @@ static const uint8_t K_ENV[8][APPFW_VIZ_BANDS] = {
 
 static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
 {
-    // GCC 误报压制:chrome 缓冲的指针逃逸进 s_chrome(供 LVGL 异步读),
-    // 跨调用分析推不出数组界,把合法写入报成 stringop-overflow。
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstringop-overflow"
     snprintf(s_ch_buf[0], sizeof(s_ch_buf[0]), "RADIO");
 
     // 时间:和框架一样,没对时就显示 --:--,免得给出 1970 误导。
@@ -281,7 +277,6 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
              s->station[0] ? s->station : "—");
 
     snprintf(s_ch_buf[6], sizeof(s_ch_buf[6]), "%s", state_text(s));
-#pragma GCC diagnostic pop
 
     s_chrome.app_name    = s_ch_buf[0];
     s_chrome.clock       = s_ch_buf[1];
