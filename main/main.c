@@ -64,6 +64,11 @@ static void apply_loudness(uint16_t v)
     radio_player_set_loudness(v != 0);
 }
 
+static void apply_effect(uint16_t v)
+{
+    radio_pages_set_effect((uint8_t)v);
+}
+
 static bool portal_ready(void *httpd)
 {
     return radio_pages_portal_register(httpd);
@@ -113,6 +118,9 @@ void app_main(void)
     uint16_t ln = 1;
     appfw_store_get_u16("opt_loudness", &ln, 1);
     radio_player_set_loudness(ln != 0);
+    uint16_t fx = 0;
+    appfw_store_get_u16("opt_effect", &fx, 0);
+    radio_pages_set_effect((uint8_t)fx);
 
     appfw_netlist_t list;
     if (!appfw_store_netlist_load(&list)) appfw_netlist_reset(&list);
@@ -138,6 +146,8 @@ void app_main(void)
     static const char *const k_vol_lbls[] = { "0%", "20%", "40%", "60%", "80%", "100%" };
     static const uint16_t k_ln_opts[] = { 0, 1 };
     static const char *const k_ln_lbls[] = { "关", "开" };
+    static const uint16_t k_fx_opts[] = { 0, 1, 2 };
+    static const char *const k_fx_lbls[] = { "经典频谱", "LED 电平表", "对称频谱" };
     static const appfw_menu_opt_t k_menu_opts[] = { {
         .key = "opt_volume", .label = "音量", .symbol = LV_SYMBOL_VOLUME_MID,
         .opts = k_vol_opts, .lbls = k_vol_lbls, .count = 6,
@@ -147,6 +157,11 @@ void app_main(void)
         .key = "opt_loudness", .label = "智能维持", .symbol = LV_SYMBOL_CHARGE,
         .opts = k_ln_opts, .lbls = k_ln_lbls, .count = 2,
         .on_change = apply_loudness,
+    }, {
+        // 动态效果:播放页律动面板三选一。
+        .key = "opt_effect", .label = "动态效果", .symbol = LV_SYMBOL_SETTINGS,
+        .opts = k_fx_opts, .lbls = k_fx_lbls, .count = 3,
+        .on_change = apply_effect,
     } };
 
     const appfw_ui_cfg_t ucfg = {

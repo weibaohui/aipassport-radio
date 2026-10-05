@@ -30,3 +30,6 @@ bool radio_pages_portal_register(void *httpd);
 
 // 当前选中项下标(供测试与调试)。
 int radio_pages_cursor(void);
+
+// 动态效果(设置菜单「动态效果」三选一):0 经典频谱 1 LED 电平表 2 对称频谱。
+void radio_pages_set_effect(uint8_t v);

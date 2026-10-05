@@ -282,6 +282,11 @@ static const radio_viz_chrome_t *play_chrome(const radio_player_snap_t *s)
 
 
 
+// ---- 动态效果前置(实现在本文件下方) ----
+static uint8_t s_effect;
+static void fx_led_render(const uint8_t *bands);
+static void fx_sym_render(const uint8_t *bands);
+
 static void viz_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -313,7 +318,155 @@ static void viz_timer_cb(lv_timer_t *timer)
 
     static uint32_t chrome_tick;
     if (++chrome_tick % (CHROME_PERIOD_MS / VIZ_PERIOD_MS) == 0) play_chrome(&s);
-    radio_viz_view_update(s_play, bands, lvl, s.volume, &s_chrome);
+
+    if (s_effect == 0) {
+        radio_viz_view_update(s_play, bands, lvl, s.volume, &s_chrome);
+        return;
+    }
+    if (s_effect == 1) fx_led_render(bands);       // LED 电平表
+    else fx_sym_render(bands);                     // 对称频谱
+}
+
+// ---- 动态效果(设置「动态效果」三选一,面板 220x44 内渲染) ----
+#define FX_PANEL_Y   206
+#define FX_PANEL_H   44
+#define FX_SEGS      4                          // LED 表 4 段(44px/段 11px)
+#define FX_SEG_H     11
+#define FX_GREEN     0x35C26B
+#define FX_YELLOW    0xFFC531
+#define FX_RED       0xE5484D
+#define FX_DIM       0x16202E
+
+static uint16_t s_fx_cap[APPFW_VIZ_BANDS];          // LED 峰帽 q8
+static lv_obj_t *s_fx_led[APPFW_VIZ_BANDS * 2];     // 柱 + 帽
+static lv_obj_t *s_fx_sym[APPFW_VIZ_BANDS * 2 + 1]; // 上柱 + 下柱 + 中心线
+static uint8_t s_fx_last_h[APPFW_VIZ_BANDS];        // 差分缓存
+
+static lv_obj_t *fx_rect(lv_obj_t *parent, int32_t x, int32_t y, int32_t w,
+                         int32_t h, uint32_t color)
+{
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_remove_style_all(o);
+    lv_obj_set_pos(o, x, y);
+    lv_obj_set_size(o, w, h);
+    lv_obj_set_style_bg_color(o, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+    return o;
+}
+
+// 经典频谱 ↔ 效果组 的互斥显隐
+static void fx_show_bars(bool show)
+{
+    if (s_play) {
+        if (show) lv_obj_clear_flag(s_play->bars.root, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(s_play->bars.root, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void fx_teardown(void)
+{
+    for (int i = 0; i < APPFW_VIZ_BANDS * 2; i++) {
+        if (s_fx_led[i]) { lv_obj_delete(s_fx_led[i]); s_fx_led[i] = NULL; }
+    }
+    for (int i = 0; i < APPFW_VIZ_BANDS * 2 + 1; i++) {
+        if (s_fx_sym[i]) { lv_obj_delete(s_fx_sym[i]); s_fx_sym[i] = NULL; }
+    }
+    memset(s_fx_last_h, 0, sizeof(s_fx_last_h));
+}
+
+static void fx_apply(uint8_t v)
+{
+    s_effect = v;
+    fx_teardown();
+    fx_show_bars(v == 0);
+    if (v == 1 && s_play) {
+        for (int i = 0; i < APPFW_VIZ_BANDS; i++) {
+            const int32_t x = 10 + 6 + i * 13;     // 面板内 16 列(与柱阵同槽)
+            s_fx_led[i] = fx_rect(s_play_layer, x, FX_PANEL_Y + FX_PANEL_H,
+                                  11, 1, FX_GREEN);
+            s_fx_led[APPFW_VIZ_BANDS + i] =
+                fx_rect(s_play_layer, x, FX_PANEL_Y + FX_PANEL_H - 2, 11, 2, FX_YELLOW);
+        }
+    } else if (v == 2 && s_play) {
+        const int cx = FX_PANEL_Y + FX_PANEL_H / 2;  // 面板中线 y=228
+        for (int i = 0; i < APPFW_VIZ_BANDS; i++) {
+            const int32_t x = 10 + 6 + i * 13;
+            const uint16_t idx = (uint16_t)((uint32_t)i * 26 / 10);
+            s_fx_sym[i] = fx_rect(s_play_layer, x, cx - 1, 11, 1, 0x2F8C86);
+            s_fx_sym[APPFW_VIZ_BANDS + i] =
+                fx_rect(s_play_layer, x, cx, 11, 1, 0x2F8C86);
+            (void)idx;
+        }
+        s_fx_sym[APPFW_VIZ_BANDS * 2] =
+            fx_rect(s_play_layer, 16, cx - 1, 208, 2, 0x3A4A5C);
+    }
+}
+
+void radio_pages_set_effect(uint8_t v)
+{
+    if (v > 2) v = 2;
+    if (v == s_effect) return;
+    fx_apply(v);
+    ESP_LOGI(TAG, "动态效果:%s", v == 0 ? "经典频谱" : v == 1 ? "LED 电平表" : "对称频谱");
+}
+
+// LED 电平表:高度量化成段(分段感),三档色,峰帽 2px 缓落
+static void fx_led_render(const uint8_t *bands)
+{
+    if (!s_play_layer) return;
+    for (int i = 0; i < APPFW_VIZ_BANDS; i++) {
+        const uint8_t seg = (uint8_t)((uint32_t)bands[i] * FX_SEGS / 256);
+        const uint8_t h = (uint8_t)(seg * FX_SEG_H);
+        lv_obj_t *col = s_fx_led[i];
+        if (!col) continue;
+        if (h != s_fx_last_h[i]) {
+            s_fx_last_h[i] = h;
+            if (h) {
+                lv_obj_clear_flag(col, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_height(col, h);
+                lv_obj_set_y(col, FX_PANEL_Y + FX_PANEL_H - h);
+            } else {
+                lv_obj_add_flag(col, LV_OBJ_FLAG_HIDDEN);
+            }
+            const uint8_t tier = seg >= FX_SEGS ? 2u : seg >= FX_SEGS - 1 ? 1u : 0u;
+            static const uint32_t TIERC[3] = { FX_GREEN, FX_YELLOW, FX_RED };
+            lv_obj_set_style_bg_color(col, lv_color_hex(TIERC[tier]), 0);
+        }
+        // 峰帽
+        lv_obj_t *cap = s_fx_led[APPFW_VIZ_BANDS + i];
+        uint32_t c = s_fx_cap[i];
+        if (bands[i] >= c) c = bands[i];
+        else c = c > (140u * VIZ_PERIOD_MS / 1000u) ? c - (140u * VIZ_PERIOD_MS / 1000u) : 0;
+        s_fx_cap[i] = (uint16_t)c;
+        const int32_t cy = FX_PANEL_Y + FX_PANEL_H - 2 - (int32_t)c * FX_PANEL_H / 256;
+        lv_obj_set_y(cap, (int32_t)(int16_t)cy);
+    }
+}
+
+// 对称频谱:面板中线向上下生长,下半为上半的 0.55 倍
+static void fx_sym_render(const uint8_t *bands)
+{
+    if (!s_play_layer) return;
+    const int32_t cx = FX_PANEL_Y + FX_PANEL_H / 2;
+    for (int i = 0; i < APPFW_VIZ_BANDS; i++) {
+        const int32_t up = (int32_t)bands[i] * 22 / 256;       // 上半最大 22px
+        const int32_t dn = up * 55 / 100;
+        lv_obj_t *u = s_fx_sym[i], *d = s_fx_sym[APPFW_VIZ_BANDS + i];
+        if (!u || !d) continue;
+        if (up) {
+            lv_obj_clear_flag(u, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_height(u, up);
+            lv_obj_set_y(u, cx - up);
+        } else {
+            lv_obj_add_flag(u, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (dn) {
+            lv_obj_clear_flag(d, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_height(d, dn);
+        } else {
+            lv_obj_add_flag(d, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 // 框架重建页面前回调(见 appfw_ui_cfg_t::page_reset):旧页面对象即将被删,
@@ -328,6 +481,8 @@ void radio_pages_page_reset(void)
     s_list_layer = NULL;
     s_play_layer = NULL;
     s_play = NULL;
+    memset(s_fx_led, 0, sizeof(s_fx_led));
+    memset(s_fx_sym, 0, sizeof(s_fx_sym));
 }
 
 void radio_pages_home_build(lv_obj_t *page)
