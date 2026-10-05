@@ -37,17 +37,22 @@ tools/validate.sh --firmware   # image layout checks + archive
 - The framework's own tests and the gate implementation live in the submodule
   (`components/framework/tools/validate.sh`).
 
-## Fonts (mandatory after any user-visible Chinese text)
+## Fonts (full common set from the framework — nothing to do in the common case)
 
-After changing any Chinese string that reaches the screen:
+Chinese fonts live in the framework at `components/framework/appfw/fonts/`:
+the complete 3500-character Modern Chinese Common Characters table plus rare
+place-name/traditional station-name characters, in both 16 px and 24 px.
+Changing ordinary UI text requires **no font step**; the framework links the
+default fonts automatically via `-u` anchors.
 
-```bash
-python3 tools/gen_fonts.py
-```
+Only a character outside the table (a rare station name showing boxes) needs:
 
-It derives the charset from source literals, regenerates the 16/24 px fonts
-and the codepoint whitelist, and runs a self-check. Skipping it shows the new
-characters as blanks on the device.
+1. Add it to `components/framework/appfw/fonts/appfw_common_charset.txt`;
+2. Re-run `gen_fonts.py` in that directory (needs Node/npx), commit the framework;
+3. Bump the submodule pointer here and re-run `python3 tools/gen_title_table.py`.
+
+The gate `tests/test_ui_charset.py` checks three levels: text ⊆ table, the
+generated fonts contain every glyph, and the title filter table is in sync.
 
 ## Built-in catalog regeneration
 

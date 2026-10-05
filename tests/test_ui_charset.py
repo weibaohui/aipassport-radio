@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """中文字形覆盖门禁。
 
-只查"字符清单里有没有"是不够的:清单与生成物可能不同步。因此这里做两级校验:
+字库在框架仓(components/framework/appfw/fonts/,常见 3500 字全量),本测试
+做三级校验:
 
-1. 受检源码字符串里的每个 CJK/全角码点,都必须出现在对应字体的字符清单里;
-2. 该码点还必须真的出现在生成的 .c 字体的 unicode_list 中——这才是设备上
-   能否显示的证据。
-
-两个字号分别检查:16px 承载全部 UI 文本;24px 只用于顶栏标题(home_title),
-见 appfw_ui.c 中 s_font24 的唯一使用点。框架的 appfw_ui.c 也用应用提供的
-字库渲染,故一并受检。
+1. 受检源码字符串里的每个 CJK/全角码点,都必须出现在框架字符清单里
+   (清单外的新字 → 补清单并重跑 gen_fonts.py);
+2. 框架生成的 .c 字体里必须真的包含清单的全部非 ASCII 码点
+   (清单改了但没重新生成字体的证据级校验);
+3. main/radio_title_table.h 必须与框架清单一致
+   (子模块更新后忘了重跑 tools/gen_title_table.py 会在这里挡住)。
 """
 
 from __future__ import annotations
@@ -20,18 +20,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FW = ROOT / "components" / "framework"
-CHARSET_16 = ROOT / "assets" / "fonts" / "radio_charset.txt"
-CHARSET_24 = ROOT / "assets" / "fonts" / "radio_charset_24.txt"
-FONT_16 = ROOT / "assets" / "fonts" / "app_font_16.c"
-FONT_24 = ROOT / "assets" / "fonts" / "app_font_24.c"
+CHARSET = FW / "appfw" / "fonts" / "appfw_common_charset.txt"
+FONT_16 = FW / "appfw" / "fonts" / "app_font_16.c"
+FONT_24 = FW / "appfw" / "fonts" / "app_font_24.c"
+TITLE_TABLE = ROOT / "main" / "radio_title_table.h"
 
-# 16px 承载的源码:框架 UI + 本应用 UI。必须和 tools/gen_fonts.py 的同名
-# 列表一致 —— 两边都漏掉某个文件,门禁就会跟着一起漏,等于没查。
-SOURCES_16 = [
+# 会把文本送进 LVGL 渲染的源码:框架 UI + 本应用 UI + 内置台名数据。
+# 台名/曲名是动态文本,由 radio_title_table.h 过滤,不在此列。
+SOURCES = [
     FW / "appfw" / "src" / "appfw_ui.c",
     ROOT / "main" / "radio_pages.c",
     ROOT / "main" / "radio_viz_view.c",
     ROOT / "main" / "radio_streams.c",
+    ROOT / "main" / "radio_catalog.h",
     ROOT / "main" / "main.c",
 ]
 
@@ -45,8 +46,7 @@ def is_checked(ch: str) -> bool:
 
 
 def strip_comments(text: str) -> str:
-    """先剥注释再扫字面量:注释里带引号的中文(如"假频谱")不是屏显文案,
-    不剥的话门禁会误报。与 aipassport-appfw 仓的同名门禁行为一致。"""
+    """先剥注释再扫字面量:注释里带引号的中文不是屏显文案,不剥会误报。"""
     text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
     return re.sub(r"//[^\n]*", "", text)
 
@@ -127,25 +127,26 @@ def font_unicode_codepoints(path: Path) -> set[int]:
 def main() -> int:
     problems: list[str] = []
 
+    if not CHARSET.is_file():
+        print(f"字形覆盖检查失败:缺少框架字符清单 {CHARSET}")
+        return 1
+    charset = charset_file(CHARSET)
+
+    # 第一级:源码文案 ⊆ 框架字符清单
     used: set[str] = set()
-    for path in SOURCES_16:
+    for path in SOURCES:
         if not path.is_file():
             problems.append(f"缺少受检源码: {path}")
             continue
         used |= string_literal_chars(path)
+    for ch in sorted(used - charset):
+        problems.append(f"框架字库缺少 U+{ord(ch):04X} {ch!r}"
+                        f"(补入 appfw_common_charset.txt 并重新生成)")
 
-    cs16 = charset_file(CHARSET_16)
-    missing = sorted(used - cs16)
-    for ch in missing:
-        problems.append(f"16px 字符集缺少 U+{ord(ch):04X} {ch!r}")
-
-    # 第二级:生成物里是否真的有这些字形
-    for label, font_path, cs in (
-        ("16px", FONT_16, cs16),
-        ("24px", FONT_24, charset_file(CHARSET_24)),
-    ):
+    # 第二级:框架生成物真的收录了清单里的全部字形
+    for label, font_path in (("16px", FONT_16), ("24px", FONT_24)):
         if not font_path.is_file():
-            problems.append(f"缺少生成的字体文件: {font_path}")
+            problems.append(f"缺少框架生成的字体文件: {font_path}")
             continue
         try:
             covered = font_unicode_codepoints(font_path)
@@ -155,36 +156,35 @@ def main() -> int:
         if not covered:
             problems.append(f"{label} 字体 {font_path.name} 里解析不到 unicode_list,无法校验覆盖")
             continue
-        want = {ord(c) for c in cs if ord(c) > 0x7F}
-        gap = sorted(want - covered)
-        for cp in gap:
-            problems.append(f"{label} 生成物缺少字形 U+{cp:04X} (清单里有但没生成出来)")
+        want = {ord(c) for c in charset if ord(c) > 0x7F}
+        for cp in sorted(want - covered):
+            problems.append(f"{label} 生成物缺少字形 U+{cp:04X}"
+                            f"(清单改了但字库没重新生成,重跑 appfw/fonts/gen_fonts.py)")
 
-    # 24px 只需覆盖顶栏标题。标题改动而字库没重生成,是这里要挡住的坑。
-    main_c = (ROOT / "main" / "main.c").read_text(encoding="utf-8")
-    m = re.search(r'\.home_title\s*=\s*"([^"]*)"', main_c)
-    if m:
-        cs24 = charset_file(CHARSET_24)
-        for ch in m.group(1):
-            if is_checked(ch) and ch not in cs24:
-                problems.append(
-                    f"顶栏标题含 {ch!r} 但 24px 字符集没有;24px 只用于标题,"
-                    f"改标题后必须重新生成 app_font_24.c"
-                )
+    # 第三级:曲名过滤表与框架清单同步
+    if TITLE_TABLE.is_file():
+        tt = TITLE_TABLE.read_text(encoding="utf-8")
+        have = {int(x, 16) for x in re.findall(r"0x([0-9A-Fa-f]{4}),", tt)}
+        want = {ord(c) for c in charset if ord(c) > 0x7F}
+        stale = sorted(want - have)
+        extra = sorted(have - want)
+        for cp in stale:
+            problems.append(f"radio_title_table.h 缺 0x{cp:04X}(框架清单更新后"
+                            f"须重跑 tools/gen_title_table.py)")
+        for cp in extra:
+            problems.append(f"radio_title_table.h 多出 0x{cp:04X}(清单已不含,重跑生成)")
     else:
-        problems.append("main.c 里找不到 .home_title,无法校验 24px 覆盖")
+        problems.append(f"缺少 {TITLE_TABLE},重跑 tools/gen_title_table.py")
 
     if problems:
         print("字形覆盖检查失败:")
         for line in problems:
             print(f"  {line}")
-        print("请把缺字补入 assets/fonts/radio_charset*.txt 并重新生成字体。")
         return 1
 
-    n16 = len([c for c in cs16 if ord(c) > 0x7F])
-    n24 = len([c for c in charset_file(CHARSET_24) if ord(c) > 0x7F])
-    print(f"字形覆盖检查通过:16px 覆盖 {len(used)} 个受检汉字;清单非 ASCII {n16} 字,"
-          f"24px 标题字 {n24} 字")
+    ncjk = len([c for c in charset if 0x4E00 <= ord(c) <= 0x9FFF])
+    print(f"字形覆盖检查通过:文案 {len(used)} 个受检字符 ⊆ 框架字库"
+          f"(含常用字 {ncjk} 个);曲名表 {TITLE_TABLE.name} 同步")
     return 0
 
 

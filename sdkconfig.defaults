@@ -63,3 +63,6 @@ CONFIG_LWIP_SNTP_MAX_SERVERS=2
 
 # --- 配网二维码(设置→配网页展示 WiFi/管理地址二维码) ---
 CONFIG_LV_USE_QRCODE=y
+# 框架全量中文字库(4333 字)的 24px 位图 >1MB,超过 LVGL 20 位 bitmap_index,
+# 必须用 32 位索引(LV_FONT_FMT_TXT_LARGE);见 components/framework/appfw/fonts/。
+CONFIG_LV_FONT_FMT_TXT_LARGE=y

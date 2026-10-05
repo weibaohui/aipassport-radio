@@ -34,16 +34,20 @@ tools/validate.sh --firmware   # 固件布局校验 + 归档
 - 框架自身的测试与门禁实现都在 submodule 里
   (`components/framework/tools/validate.sh`)。
 
-## 字库(改了中文文案必做)
+## 字库(框架全量,常规改动零操作)
 
-任何会显示在屏幕上的中文文案改动后:
+中文字库在框架 `components/framework/appfw/fonts/`:《现代汉语常用字表》
+3500 字全量 + 生僻地名/繁体台名,16/24px 两个字号。改普通中文文案
+**不需要**任何字库操作;框架经 `-u` 锚点自动链接默认字库。
 
-```bash
-python3 tools/gen_fonts.py
-```
+只有引入清单之外的新字符(生僻台名等,屏幕出现方框)才需要:
 
-它从源码字面量推导字符集,重新生成 16/24px 字库、码点白名单并跑自检。
-漏跑的后果:新字在真机上显示空白。
+1. 把字补入 `components/framework/appfw/fonts/appfw_common_charset.txt`;
+2. 在该目录重跑 `gen_fonts.py`(需 Node/npx)并提交框架仓;
+3. 应用仓更新子模块指针后重跑 `python3 tools/gen_title_table.py`。
+
+门禁 `tests/test_ui_charset.py` 会三级校验:文案⊆清单、生成物含全部字形、
+曲名过滤表与清单同步。
 
 ## 内置台目再生成
 

@@ -1,3 +1,7 @@
+<p align="right">
+  <a href="dep.md">English</a> · <strong>简体中文</strong>
+</p>
+
 # 依赖版本记录(dep)
 
 应用与底层框架(aipassport-fw)的版本配对台账。框架以 git 子模块挂在

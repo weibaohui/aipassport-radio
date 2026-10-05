@@ -9,8 +9,5 @@ idf_component_register(
     REQUIRES appfw bsp esp_timer nvs_flash esp_audio_codec json esp_http_client mbedtls
 )
 
-# 中文字体子集(生成物,来源/命令/字符清单见 assets/fonts/README.md)。
-target_sources(${COMPONENT_LIB} PRIVATE
-    "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/app_font_16.c"
-    "${CMAKE_CURRENT_LIST_DIR}/../assets/fonts/app_font_24.c"
-)
+# 中文字库由框架提供(appfw/fonts/,常见 3500 字全量),无需应用自带;
+# 自带子集字库的旧应用用同名强符号覆盖即可。
